@@ -182,6 +182,16 @@ def run(
         # Normalize per time-step to emphasize relative differences
         spk_probs /= np.max(spk_probs, axis=1, keepdims=True) + 1e-6
         
+        # --- Safe normalization summary (追加ブロック①) ---
+        row_max = np.max(spk_probs, axis=1, keepdims=True)
+        safe = row_max > 1e-6
+        spk_probs[~safe] = 1.0 / max(spk_probs.shape[1], 1)  # 全ゼロ行は一様分布に置換
+        
+        # ログでざっくり分布を可視化
+        LOGGER.info("[SPK-PROBS] mean_max=%.3f, mean_entropy=%.3f",
+                    float(np.mean(np.max(spk_probs, axis=1))),
+                    float(-np.mean(np.sum(spk_probs * np.log(np.clip(spk_probs, 1e-9, 1.0)), axis=1))))
+        
         # Aligner tuning for better switching
         config.aligner.delta_switch = 0.1
         config.aligner.beta = 0.3
@@ -205,6 +215,13 @@ def run(
                     f"grid_times={len(grid_times)}")
         
         speaker_segments = aligner.align(words, vad_probs, spk_probs, grid_times)
+        
+        # --- Speaker distribution summary (追加ブロック②) ---
+        if speaker_segments and isinstance(speaker_segments[0], (list, tuple)):
+            spks = [int(s[2]) for s in speaker_segments if len(s) == 3]
+            if spks:
+                unique, counts = np.unique(spks, return_counts=True)
+                LOGGER.info("[ALIGNER-STATS] speakers=%s", dict(zip(unique.tolist(), counts.tolist())))
         
         # --- after aligner.align(...) ---
         if speaker_segments and isinstance(speaker_segments[0], (list, tuple)) and len(speaker_segments[0]) == 3:
