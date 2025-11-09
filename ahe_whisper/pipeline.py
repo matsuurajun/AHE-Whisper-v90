@@ -175,9 +175,14 @@ def run(
         
         spk_probs = diarizer.get_speaker_probabilities(embeddings, valid_embeddings_mask, speaker_centroids, grid_times, hop_len, sr)
         
-        # --- Improved normalization with temperature scaling ---
-        tau = 0.3  # 温度係数（0.3〜0.7を推奨：小さいほどシャープ）
+        # --- Improved normalization with contrast scaling + temperature ---
+        tau = 0.4
+        scale = 3.0  # <= 新規追加：分散を増幅
         spk_probs = (spk_probs + 1.0) / 2.0
+        spk_probs = np.clip(spk_probs, 0.0, 1.0)
+        
+        # コントラスト強調
+        spk_probs = (spk_probs - 0.5) * scale + 0.5
         spk_probs = np.clip(spk_probs, 0.0, 1.0)
         
         max_per_row = np.max(spk_probs, axis=1, keepdims=True)
@@ -187,11 +192,10 @@ def run(
         if np.any(~np.isfinite(spk_probs)):
             spk_probs = np.nan_to_num(spk_probs, nan=1.0 / spk_probs.shape[1])
         
-        LOGGER.info("[SPK-PROBS] mean_max=%.3f, mean_entropy=%.3f (tau=%.2f)",
+        LOGGER.info("[SPK-PROBS] mean_max=%.3f, mean_entropy=%.3f (tau=%.2f, scale=%.1f)",
                     float(np.mean(np.max(spk_probs, axis=1))),
                     float(-np.mean(np.sum(spk_probs * np.log(np.clip(spk_probs, 1e-9, 1.0)), axis=1))),
-                    tau)
-
+                    tau, scale)
         
         # --- Mini Enhancement: Stabilize speaker transition detection ---
         # 強制的に話者確率分布にスパース性を導入
