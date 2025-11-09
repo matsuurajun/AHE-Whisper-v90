@@ -112,5 +112,14 @@ class Diarizer:
         for k in range(num_speakers):
             interp_func = interp1d(valid_times, valid_similarities[:, k], kind='linear', bounds_error=False, fill_value="extrapolate")
             spk_probs[:, k] = interp_func(grid_times)
-            
-        return safe_softmax(spk_probs)
+        
+        # --- diagnostics ---
+        self.last_valid_sims = valid_similarities.copy()
+        
+        if np.std(valid_similarities) < 0.05:
+            print(f"[DEBUG-DIAR] low variance in valid_sims (std={np.std(valid_similarities):.4f}) → applying contrast normalization")
+            valid_similarities = (valid_similarities - np.mean(valid_similarities, axis=1, keepdims=True)) / \
+                         (np.std(valid_similarities, axis=1, keepdims=True) + 1e-6)
+            valid_similarities = np.tanh(valid_similarities)
+        
+        return safe_softmax(spk_probs, tau=0.4 if np.std(valid_similarities) < 0.05 else 1.0)
