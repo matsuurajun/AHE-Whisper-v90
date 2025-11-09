@@ -175,26 +175,24 @@ def run(
         
         spk_probs = diarizer.get_speaker_probabilities(embeddings, valid_embeddings_mask, speaker_centroids, grid_times, hop_len, sr)
         
-        # Cosine similarity normalization
+        # --- Improved normalization to preserve speaker contrast ---
         spk_probs = (spk_probs + 1.0) / 2.0
         spk_probs = np.clip(spk_probs, 0.0, 1.0)
         
-        # Normalize per time-step to emphasize relative differences
-        spk_probs /= np.max(spk_probs, axis=1, keepdims=True) + 1e-6
+        # ここを修正：行単位の最大値で割る代わりに、ソフト正規化を導入
+        max_per_row = np.max(spk_probs, axis=1, keepdims=True)
+        spk_probs = np.exp(spk_probs - max_per_row)  # ソフトマックス前処理
+        spk_probs = spk_probs / np.sum(spk_probs, axis=1, keepdims=True)
         
-        # --- Safe normalization summary (最終版) ---
-        row_max = np.max(spk_probs, axis=1, keepdims=True)
-        safe = row_max.squeeze() > 1e-6  # shape=(N,)
+        # 安全性チェック
+        if np.any(~np.isfinite(spk_probs)):
+            spk_probs = np.nan_to_num(spk_probs, nan=1.0 / spk_probs.shape[1])
         
-        # 全ゼロ行は一様分布に置換
-        if np.any(~safe):
-            spk_probs[~safe, :] = 1.0 / max(spk_probs.shape[1], 1)
-        
-        # 統計ログ
+        # ログ統計（確認に重要）
         LOGGER.info("[SPK-PROBS] mean_max=%.3f, mean_entropy=%.3f",
                     float(np.mean(np.max(spk_probs, axis=1))),
                     float(-np.mean(np.sum(spk_probs * np.log(np.clip(spk_probs, 1e-9, 1.0)), axis=1))))
-
+        
         # --- Mini Enhancement: Stabilize speaker transition detection ---
         # 強制的に話者確率分布にスパース性を導入
         entropy = -np.sum(spk_probs * np.log(spk_probs + 1e-8), axis=1)
