@@ -132,8 +132,31 @@ def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_roo
                 logger.info(f"--- Job Start: {Path(audio_path).name} ---")
                 reset_metrics()
                 step_times, t_start = [], time.perf_counter()
+                #res = run_ai_pipeline(audio_path, config, project_root)
+                #step_times.append(("Core AI Pipeline", time.perf_counter() - t_start))
+                # --- Stage-by-stage measurement ---
+                step_times = []
+                t_total_start = time.perf_counter()
+                
+                # --- ASR ---
+                t_asr = time.perf_counter()
+                run_ai_pipeline(audio_path, config, project_root, stage="asr")
+                step_times.append(("ASR (mlx_whisper)", time.perf_counter() - t_asr))
+                
+                # --- VAD ---
+                t_vad = time.perf_counter()
+                run_ai_pipeline(audio_path, config, project_root, stage="vad")
+                step_times.append(("VAD (silero_vad)", time.perf_counter() - t_vad))
+                
+                # --- DIAR ---
+                t_diar = time.perf_counter()
+                run_ai_pipeline(audio_path, config, project_root, stage="diar")
+                step_times.append(("DIAR (wespeaker)", time.perf_counter() - t_diar))
+                
+                # --- FULL PIPELINE (ALIGN + EXPORT) ---
+                t_main = time.perf_counter()
                 res = run_ai_pipeline(audio_path, config, project_root)
-                step_times.append(("Core AI Pipeline", time.perf_counter() - t_start))
+                step_times.append(("Core AI Pipeline (Align+Post)", time.perf_counter() - t_main))
                 
                 # --- ensure exportable structure ---
                 if "speaker_segments" not in res or not res["speaker_segments"]:
