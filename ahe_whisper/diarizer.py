@@ -108,6 +108,18 @@ class Diarizer:
             if len(valid_times) == 1:
                 spk_probs[:, :] = valid_similarities[0, :]
             return safe_softmax(spk_probs)
+        
+        # === [PATCH v90.91-CONTRAST] Apply contrast normalization before interpolation ===
+        var = np.std(valid_similarities)
+        if var < 0.05:
+            print(f"[DEBUG-DIAR] low variance (std={var:.4f}) → applying contrast normalization (pre-interp)")
+            # Z-score normalization per frame
+            valid_similarities = (valid_similarities - np.mean(valid_similarities, axis=1, keepdims=True)) / \
+                                 (np.std(valid_similarities, axis=1, keepdims=True) + 1e-6)
+            # Moderate contrast enhancement
+            valid_similarities = np.tanh(valid_similarities * 2.5)
+            print(f"[DEBUG-DIAR] AFTER norm: std={np.std(valid_similarities):.4f}, "
+                  f"min={np.min(valid_similarities):.3f}, max={np.max(valid_similarities):.3f}")
 
         for k in range(num_speakers):
             interp_func = interp1d(valid_times, valid_similarities[:, k], kind='linear', bounds_error=False, fill_value="extrapolate")
@@ -115,11 +127,5 @@ class Diarizer:
         
         # --- diagnostics ---
         self.last_valid_sims = valid_similarities.copy()
-        
-        if np.std(valid_similarities) < 0.05:
-            print(f"[DEBUG-DIAR] low variance in valid_sims (std={np.std(valid_similarities):.4f}) → applying contrast normalization")
-            valid_similarities = (valid_similarities - np.mean(valid_similarities, axis=1, keepdims=True)) / \
-                         (np.std(valid_similarities, axis=1, keepdims=True) + 1e-6)
-            valid_similarities = np.tanh(valid_similarities)
         
         return safe_softmax(spk_probs, tau=0.4 if np.std(valid_similarities) < 0.05 else 1.0)
