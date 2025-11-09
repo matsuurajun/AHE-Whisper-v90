@@ -182,16 +182,19 @@ def run(
         # Normalize per time-step to emphasize relative differences
         spk_probs /= np.max(spk_probs, axis=1, keepdims=True) + 1e-6
         
-        # --- Safe normalization summary (追加ブロック①) ---
+        # --- Safe normalization summary (最終版) ---
         row_max = np.max(spk_probs, axis=1, keepdims=True)
-        safe = row_max > 1e-6
-        spk_probs[~safe] = 1.0 / max(spk_probs.shape[1], 1)  # 全ゼロ行は一様分布に置換
+        safe = row_max.squeeze() > 1e-6  # shape=(N,)
         
-        # ログでざっくり分布を可視化
+        # 全ゼロ行は一様分布に置換
+        if np.any(~safe):
+            spk_probs[~safe, :] = 1.0 / max(spk_probs.shape[1], 1)
+        
+        # 統計ログ
         LOGGER.info("[SPK-PROBS] mean_max=%.3f, mean_entropy=%.3f",
                     float(np.mean(np.max(spk_probs, axis=1))),
                     float(-np.mean(np.sum(spk_probs * np.log(np.clip(spk_probs, 1e-9, 1.0)), axis=1))))
-        
+
         # Aligner tuning for better switching
         config.aligner.delta_switch = 0.1
         config.aligner.beta = 0.3
