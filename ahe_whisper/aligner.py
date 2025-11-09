@@ -50,27 +50,42 @@ class OverlapDPAligner:
         
         word_costs = self._precompute_word_costs(word_info, grid_times)
         
-        # 初期コスト
+        # === 改良版: スコア最大化方針 (話者分離有効化) ===
+        # 各スコアを「確率が高い方が良い」方向に符号反転し、最大化問題に変換する
+        # 初期スコア
         for k in range(num_speakers):
-            cost[0, k] = (self.alpha * (1.0 - vad_probs[0]) +
-                          self.beta * (1.0 - spk_probs[0, k]) +
-                          self.gamma * word_costs[0])
+            cost[0, k] = -(
+                self.alpha * vad_probs[0] +
+                self.beta  * spk_probs[0, k] -
+                self.gamma * word_costs[0]
+            )
 
-        # DP実行
+        # DP更新（スコア最大化）
         for t in range(1, num_frames):
-            vad_cost = self.alpha * (1.0 - vad_probs[t])
-            word_cost_t = self.gamma * word_costs[t]
+            vad_score = self.alpha * vad_probs[t]
+            word_score_t = -self.gamma * word_costs[t]
             
             for k in range(num_speakers):
-                spk_cost = self.beta * (1.0 - spk_probs[t, k])
-                base_cost = vad_cost + spk_cost + word_cost_t
+                spk_score = self.beta * spk_probs[t, k]
+                base_score = vad_score + spk_score + word_score_t
                 
-                prev_costs = cost[t - 1, :] + self.delta_switch * (1 - np.eye(num_speakers, dtype=np.float32)[k])
-                best_prev_k = np.argmin(prev_costs)
-                min_prev_cost = prev_costs[best_prev_k]
+                # 話者切替ペナルティをスコア方向で適用（切替時に少し不利）
+                prev_scores = cost[t - 1, :] - self.delta_switch * (
+                    1 - np.eye(num_speakers, dtype=np.float32)[k]
+                )
                 
-                cost[t, k] = min_prev_cost + base_cost
+                best_prev_k = np.argmax(prev_scores)
+                max_prev_score = prev_scores[best_prev_k]
+                
+                cost[t, k] = max_prev_score + base_score
                 path[t, k] = best_prev_k
+                
+        # バックトラッキング修正 (最大スコアを採用)
+        final_path = np.zeros(num_frames, dtype=np.int32)
+        if num_frames > 0:
+            final_path[-1] = np.argmax(cost[-1, :])
+            for t in range(num_frames - 2, -1, -1):
+                final_path[t] = path[t + 1, final_path[t + 1]]
 
         # バックトラッキング
         final_path = np.zeros(num_frames, dtype=np.int32)
