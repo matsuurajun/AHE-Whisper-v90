@@ -175,9 +175,31 @@ def run(
         
         spk_probs = diarizer.get_speaker_probabilities(embeddings, valid_embeddings_mask, speaker_centroids, grid_times, hop_len, sr)
         
+        # === Diagnostic and normalization enhancement ===
+        LOGGER.info("[DEBUG-DIAR] valid_sims diagnostics before normalization")
+        try:
+            if hasattr(diarizer, "last_valid_sims"):
+                sims = diarizer.last_valid_sims
+                LOGGER.info("[DEBUG-DIAR] valid_sims stats: min=%.4f, max=%.4f, mean=%.4f, std=%.4f",
+                            float(np.min(sims)), float(np.max(sims)),
+                            float(np.mean(sims)), float(np.std(sims)))
+                if float(np.std(sims)) < 0.05:
+                    LOGGER.warning("[DEBUG-DIAR] valid_sims has very low variance (%.4f). Applying contrast normalization.", float(np.std(sims)))
+                    sims = (sims - np.mean(sims, axis=1, keepdims=True)) / (np.std(sims, axis=1, keepdims=True) + 1e-6)
+                    sims = np.tanh(sims)
+                    diarizer.last_valid_sims = sims  # overwrite for consistency
+        except Exception as e:
+            LOGGER.warning("[DEBUG-DIAR] could not inspect valid_sims: %s", str(e))
+
         # --- Improved normalization with contrast scaling + temperature ---
         tau = 0.4
         scale = 3.0  # <= 新規追加：分散を増幅
+        
+        # --- sanity log ---
+        LOGGER.info("[SPK-PROBS-RAW] shape=%s, min=%.4f, max=%.4f, mean=%.4f, std=%.4f",
+                    str(spk_probs.shape), float(np.min(spk_probs)), float(np.max(spk_probs)), 
+                    float(np.mean(spk_probs)), float(np.std(spk_probs)))
+        
         spk_probs = (spk_probs + 1.0) / 2.0
         spk_probs = np.clip(spk_probs, 0.0, 1.0)
         
