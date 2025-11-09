@@ -23,13 +23,53 @@ LOGGER = logging.getLogger("ahe_whisper_worker")
 def run(
     audio_path: str,
     config: AppConfig,
-    project_root: Path
+    project_root: Path,
+    stage: str = None
 ) -> Dict[str, Any]:
     
     t0 = time.perf_counter()
     waveform, sr = librosa.load(audio_path, sr=16000, mono=True)
     duration_sec = len(waveform) / sr
     LOGGER.info(f"Audio loaded: duration={duration_sec:.2f}s")
+    
+    # --- Stage-selective partial run (for performance profiling) ---
+    if stage:
+        LOGGER.info(f"[PIPELINE] Running stage='{stage}' only for timing test")
+
+        if stage == "asr":
+            asr_model_path = ensure_model_available('asr', project_root)
+            LOGGER.info("[STAGE-ASR] Loading Whisper model...")
+            _ = mlx_whisper.transcribe(
+                audio=waveform,
+                path_or_hf_repo=str(asr_model_path),
+                language=config.transcription.language,
+                word_timestamps=True,
+                no_speech_threshold=getattr(config.transcription, "no_speech_threshold", 0.65),
+                condition_on_previous_text=False,
+            )
+            return {"stage": "asr", "ok": True}
+
+        elif stage == "vad":
+            vad_model_path = ensure_model_available('vad', project_root)
+            LOGGER.info("[STAGE-VAD] Running Silero-VAD detection...")
+            vad = VAD(vad_model_path, config.vad)
+            _ = vad.get_speech_probabilities(waveform, sr, config.aligner.grid_hz)
+            return {"stage": "vad", "ok": True}
+
+        elif stage == "diar":
+            ecapa_model_path = ensure_model_available('embedding', project_root)
+            LOGGER.info("[STAGE-DIAR] Running ECAPA embedding extraction...")
+            ecapa_sess = build_ecapa_session(ecapa_model_path, config.embedding)
+            warmup_ecapa(ecapa_sess)
+            win_len = int(config.embedding.embedding_win_sec * sr)
+            hop_len = int(config.embedding.embedding_hop_sec * sr)
+            audio_chunks = [waveform[i:i+win_len] for i in range(0, len(waveform), hop_len)]
+            _ = ecapa_embed_batched(ecapa_sess, ecapa_model_path, audio_chunks, sr, config.embedding)
+            return {"stage": "diar", "ok": True}
+
+        else:
+            LOGGER.warning(f"[PIPELINE] Unknown stage='{stage}', skipping execution.")
+            return {"stage": stage, "ok": False}
     
     asr_model_path = ensure_model_available('asr', project_root)
     vad_model_path = ensure_model_available('vad', project_root)
