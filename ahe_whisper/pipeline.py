@@ -175,6 +175,9 @@ def run(
         
         spk_probs = diarizer.get_speaker_probabilities(embeddings, valid_embeddings_mask, speaker_centroids, grid_times, hop_len, sr)
         
+        # Cosine similarity normalization
+        spk_probs = (spk_probs + 1.0) / 2.0
+        
         config.aligner.non_speech_th = 0.02
         aligner = OverlapDPAligner(config.aligner)
         
