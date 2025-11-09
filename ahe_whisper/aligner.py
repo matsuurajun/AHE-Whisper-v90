@@ -87,13 +87,6 @@ class OverlapDPAligner:
             for t in range(num_frames - 2, -1, -1):
                 final_path[t] = path[t + 1, final_path[t + 1]]
 
-        # バックトラッキング
-        final_path = np.zeros(num_frames, dtype=np.int32)
-        if num_frames > 0:
-            final_path[-1] = np.argmin(cost[-1, :])
-            for t in range(num_frames - 2, -1, -1):
-                final_path[t] = path[t + 1, final_path[t + 1]]
-
         # === 改良されたセグメント生成 ===
         segments = []
         if num_frames > 0:
