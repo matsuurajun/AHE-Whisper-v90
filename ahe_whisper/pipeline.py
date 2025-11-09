@@ -177,6 +177,15 @@ def run(
         
         # Cosine similarity normalization
         spk_probs = (spk_probs + 1.0) / 2.0
+        spk_probs = np.clip(spk_probs, 0.0, 1.0)
+        
+        # Normalize per time-step to emphasize relative differences
+        spk_probs /= np.max(spk_probs, axis=1, keepdims=True) + 1e-6
+        
+        # Aligner tuning for better switching
+        config.aligner.delta_switch = 0.1
+        config.aligner.beta = 0.3
+        config.aligner.gamma = 0.5
         
         config.aligner.non_speech_th = 0.02
         aligner = OverlapDPAligner(config.aligner)
