@@ -128,4 +128,16 @@ class Diarizer:
         # --- diagnostics ---
         self.last_valid_sims = valid_similarities.copy()
         
-        return safe_softmax(spk_probs, tau=0.4 if np.std(valid_similarities) < 0.05 else 1.0)
+        # === [PATCH v90.92-TAU-TRACE] Softmax temperature diagnostics ===
+        tau_used = 0.4 if np.std(valid_similarities) < 0.05 else 1.0
+        print(f"[DEBUG-DIAR-TAU] τ used = {tau_used:.2f}, std(valid_sims)={np.std(valid_similarities):.4f}")
+        print(f"[DEBUG-DIAR-TAU] spk_probs stats: min={spk_probs.min():.3f}, max={spk_probs.max():.3f}, "
+              f"mean={spk_probs.mean():.3f}, std={spk_probs.std():.3f}")
+
+        probs_out = safe_softmax(spk_probs, tau=tau_used)
+
+        # Post-softmax diagnostic
+        ent = -np.sum(probs_out * np.log(probs_out + 1e-9), axis=1).mean()
+        print(f"[DEBUG-DIAR-TAU] mean_max={probs_out.max(axis=1).mean():.3f}, mean_entropy={ent:.3f}")
+
+        return probs_out
