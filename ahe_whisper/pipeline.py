@@ -183,7 +183,9 @@ def run(
                             float(np.mean(np.max(diarizer.last_probs, axis=1))),
                             float(-np.mean(np.sum(
                                 diarizer.last_probs * np.log(np.clip(diarizer.last_probs, 1e-9, 1.0)), axis=1))))
-                del diarizer.last_probs  # 分析後にメモリ解放
+                # --- release memory early (analysis aid) ---
+                del diarizer.last_probs
+                LOGGER.debug("[DEBUG-DIAR] last_probs deleted to reduce memory footprint")
         except Exception as e:
             LOGGER.warning(f"[DEBUG-DIAR] could not inspect/delete last_probs: {e}")
         
