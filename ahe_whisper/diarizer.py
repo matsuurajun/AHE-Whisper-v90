@@ -3,10 +3,12 @@ import numpy as np
 from sklearn.cluster import KMeans
 from scipy.interpolate import interp1d
 from typing import Tuple
+import logging
 
 from ahe_whisper.utils import safe_softmax, safe_l2_normalize
 from ahe_whisper.config import DiarizationConfig
 
+LOGGER = logging.getLogger(__name__)
 RNG = np.random.default_rng(42)
 
 class Diarizer:
