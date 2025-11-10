@@ -117,7 +117,7 @@ class Diarizer:
             valid_similarities = (valid_similarities - np.mean(valid_similarities, axis=1, keepdims=True)) / \
                                  (np.std(valid_similarities, axis=1, keepdims=True) + 1e-6)
             # Moderate contrast enhancement
-            valid_similarities = np.tanh(valid_similarities * 2.5)
+            valid_similarities = np.tanh(valid_similarities * 3.0)
             print(f"[DEBUG-DIAR] AFTER norm: std={np.std(valid_similarities):.4f}, "
                   f"min={np.min(valid_similarities):.3f}, max={np.max(valid_similarities):.3f}")
 
