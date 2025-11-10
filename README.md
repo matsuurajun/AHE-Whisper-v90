@@ -104,8 +104,11 @@ This repository is intended for internal R&D use and not for model redistributio
 
 ## 🏷️ Version
 
-Current Release: **v90.90 – Definitive**
-Tag: `v90.90`
-Date: 2025-11-08
-Next planned milestone: **v91.00 (Fluid Inference Beta)**
+Current Experimental Branch: **v90.96 — Local τ + Smooth Aligner**
+Branch: `feature/v90.96_local-tau-smooth-align`
+Date: 2025-11-10
+
+> Derived from v90.90 “Definitive”  
+> Focus: improved speaker diarization contrast & stability under adaptive τ control
+
 

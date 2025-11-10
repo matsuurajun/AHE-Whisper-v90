@@ -1,5 +1,24 @@
 # AHE-Whisper — Changelog
 
+## [v90.96] — 2025-11-10
+
+**Experimental Branch — `feature/v90.96_local-tau-smooth-align`**
+
+🧩 *Core*
+* Introduced **local τ (temperature) scheduler** for dynamic softmax scaling based on similarity variance.
+* Added **post-sharping (γ=1.3)** and entropy monitoring for stable speaker probability contrast.
+* Integrated **probability smoothing (EMA / local window)** to reduce speaker-flutter and over-segmentation.
+* Implemented **temporary storage & diagnostic release** (`last_probs`) for memory-efficient debugging.
+
+⚙️ *Perf*
+* Improved diarization precision while maintaining RTF ≈ 0.19.
+* Aligner now exhibits natural speaker transitions comparable to v34.02, with enhanced stability.
+
+📦 *Infra*
+* Added early-memory release hook (`del self.last_probs`) to limit peak memory footprint.
+* Branch: `feature/v90.96_local-tau-smooth-align`
+
+
 ## [v90.90] — 2025-11-08
 
 **Definitive Release**
