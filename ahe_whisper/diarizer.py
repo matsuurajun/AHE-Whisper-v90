@@ -134,10 +134,30 @@ class Diarizer:
         print(f"[DEBUG-DIAR-TAU] spk_probs stats: min={spk_probs.min():.3f}, max={spk_probs.max():.3f}, "
               f"mean={spk_probs.mean():.3f}, std={spk_probs.std():.3f}")
 
-        probs_out = safe_softmax(spk_probs, tau=tau_used)
+        # --- PATCH v90.93: Explicit τ-softmax + γ-sharpen ---
+        # 1️⃣ 温度付きsoftmax (τ=0.4想定)
+        exp_scaled = np.exp(spk_probs / tau_used)
+        spk_probs_tau = exp_scaled / np.sum(exp_scaled, axis=1, keepdims=True)
 
-        # Post-softmax diagnostic
-        ent = -np.sum(probs_out * np.log(probs_out + 1e-9), axis=1).mean()
-        print(f"[DEBUG-DIAR-TAU] mean_max={probs_out.max(axis=1).mean():.3f}, mean_entropy={ent:.3f}")
+        mean_max_pre = float(np.mean(np.max(spk_probs_tau, axis=1)))
+        entropy_pre = float(-np.mean(np.sum(spk_probs_tau * np.log(spk_probs_tau + 1e-12), axis=1)))
+        print(f"[SPK-PROBS] (pre-sharp) τ={tau_used:.2f}, mean_max={mean_max_pre:.3f}, entropy={entropy_pre:.3f}")
 
+        # 2️⃣ 軽いシャープ化 (γ=1.3)
+        gamma = 1.3
+        spk_probs_sharp = spk_probs_tau ** gamma
+        spk_probs_sharp /= np.sum(spk_probs_sharp, axis=1, keepdims=True)
+
+        mean_max_post = float(np.mean(np.max(spk_probs_sharp, axis=1)))
+        entropy_post = float(-np.mean(np.sum(spk_probs_sharp * np.log(spk_probs_sharp + 1e-12), axis=1)))
+        print(f"[SPK-PROBS] (post-sharp) γ={gamma:.2f}, mean_max={mean_max_post:.3f}, entropy={entropy_post:.3f}")
+
+        # τの動作確認
+        print(f"[DEBUG-DIAR-TAU] τ confirmed active = {tau_used:.2f}")
+        
+        # === [PATCH v90.94-DEBUG-SAVE] 一時保存 for 分析 ===
+        self.last_probs = spk_probs_sharp.copy()
+
+        # 3️⃣ 出力を返す
+        probs_out = spk_probs_sharp
         return probs_out
