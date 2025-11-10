@@ -23,15 +23,15 @@ class EmbeddingConfig:
 @dataclass
 class DiarizationConfig:
     min_speakers: int = 0
-    max_speakers: int = 8
+    max_speakers: int = 4
     engine: str = "soft-em-adc"
     vad_th_start: float = 0.50
     vad_th_end: float = 0.20
     em_tau_schedule: List[float] = field(default_factory=lambda: [10.0, 5.0, 3.0])
-    min_speaker_duration_sec: float = 1.0
+    min_speaker_duration_sec: float = 3.0
     min_fallback_duration_sec: float = 1.0
     min_speech_sec: float = 0.2
-    max_merge_gap_sec: float = 1.0
+    max_merge_gap_sec: float = 1.2
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.vad_th_start <= 1.0):
