@@ -6,6 +6,7 @@ from ahe_whisper.config import AlignerConfig
 
 class OverlapDPAligner:
     def __init__(self, config: AlignerConfig) -> None:
+        self.config = config  # ←★追加：設定全体を保持
         self.alpha = config.alpha
         self.beta = config.beta
         self.gamma = config.gamma
@@ -47,6 +48,25 @@ class OverlapDPAligner:
         
         cost = np.full((num_frames, num_speakers), np.inf, dtype=np.float32)
         path = np.full((num_frames, num_speakers), -1, dtype=np.int32)
+        
+        # === [AHE PATCH v90.97] Smooth Aligner (optional pre-processing) ===
+        if getattr(self, "config", None) and getattr(self.config, "use_smooth_aligner", False):
+            alpha = getattr(self.config, "smooth_alpha", 0.25)
+            gamma = getattr(self.config, "smooth_gamma", 1.2)
+            print(f"[SMOOTH-ALIGNER] Applying EMA(alpha={alpha}) + Peak(gamma={gamma}) to spk_probs")
+
+            # --- Peak強調 ---
+            spk_probs = np.power(spk_probs, gamma)
+            spk_probs /= np.sum(spk_probs, axis=1, keepdims=True) + 1e-12
+
+            # --- 時間平滑 (EMA) ---
+            ema = np.empty_like(spk_probs)
+            ema[0] = spk_probs[0]
+            for t in range(1, len(spk_probs)):
+                ema[t] = alpha * spk_probs[t] + (1 - alpha) * ema[t - 1]
+            spk_probs = ema
+
+            print(f"[SMOOTH-ALIGNER] Smoothed spk_probs: shape={spk_probs.shape}, mean_max={np.mean(np.max(spk_probs, axis=1)):.3f}")
         
         word_costs = self._precompute_word_costs(word_info, grid_times)
         
