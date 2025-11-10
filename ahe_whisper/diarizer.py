@@ -204,6 +204,13 @@ class Diarizer:
                 LOGGER.warning(f"[DEBUG-DIAR] could not delete last_probs: {e}")
 
             # === /[v90.96][DIAR] ===
+            
+            # === [v90.96-FIX] interpolate Local-τ probs to grid_times ===
+            interp_out = np.zeros((len(grid_times), K), dtype=np.float32)
+            for k in range(K):
+                interp_func = interp1d(valid_times, spk_probs[:, k], kind='linear', bounds_error=False, fill_value="extrapolate")
+                interp_out[:, k] = interp_func(grid_times)
+            spk_probs = interp_out  # replace with full-resolution probabilities
 
         for k in range(num_speakers):
             interp_func = interp1d(valid_times, valid_similarities[:, k], kind='linear', bounds_error=False, fill_value="extrapolate")
