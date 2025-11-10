@@ -175,6 +175,18 @@ def run(
         
         spk_probs = diarizer.get_speaker_probabilities(embeddings, valid_embeddings_mask, speaker_centroids, grid_times, hop_len, sr)
         
+        # === [PATCH v90.95] 一時保存内容のログ確認と解放 ===
+        try:
+            if hasattr(diarizer, "last_probs"):
+                LOGGER.info("[DEBUG-DIAR] last_probs available: shape=%s, mean_max=%.3f, entropy=%.3f",
+                            str(diarizer.last_probs.shape),
+                            float(np.mean(np.max(diarizer.last_probs, axis=1))),
+                            float(-np.mean(np.sum(
+                                diarizer.last_probs * np.log(np.clip(diarizer.last_probs, 1e-9, 1.0)), axis=1))))
+                del diarizer.last_probs  # 分析後にメモリ解放
+        except Exception as e:
+            LOGGER.warning(f"[DEBUG-DIAR] could not inspect/delete last_probs: {e}")
+        
         # === Diagnostic and normalization enhancement ===
         LOGGER.info("[DEBUG-DIAR] valid_sims diagnostics before normalization")
         try:

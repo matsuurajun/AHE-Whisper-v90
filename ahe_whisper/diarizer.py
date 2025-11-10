@@ -129,7 +129,7 @@ class Diarizer:
         self.last_valid_sims = valid_similarities.copy()
         
         # === [PATCH v90.92-TAU-TRACE] Softmax temperature diagnostics ===
-        tau_used = 0.4 if np.std(valid_similarities) < 0.05 else 1.0
+        tau_used = 0.4 if np.std(valid_similarities) < 0.08 else 0.6
         print(f"[DEBUG-DIAR-TAU] τ used = {tau_used:.2f}, std(valid_sims)={np.std(valid_similarities):.4f}")
         print(f"[DEBUG-DIAR-TAU] spk_probs stats: min={spk_probs.min():.3f}, max={spk_probs.max():.3f}, "
               f"mean={spk_probs.mean():.3f}, std={spk_probs.std():.3f}")
