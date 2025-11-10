@@ -159,12 +159,12 @@ class Diarizer:
             spk_valid = np.exp(logits)
             spk_valid /= np.sum(spk_valid, axis=1, keepdims=True) + 1e-12
 
-            # 事後シャープ + EMA平滑
-            gamma = 1.30
+            # 事後シャープ + EMA平滑（ワンショット実験 gamma=1.55 / alpha=0.30）
+            gamma = 1.55
             spk_valid = np.power(spk_valid, gamma)
             spk_valid /= np.sum(spk_valid, axis=1, keepdims=True) + 1e-12
 
-            alpha = 0.22
+            alpha = 0.30
             ema = np.empty_like(spk_valid)
             ema[0] = spk_valid[0]
             for t in range(1, T):
