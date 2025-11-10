@@ -123,99 +123,86 @@ class Diarizer:
             print(f"[DEBUG-DIAR] AFTER norm: std={np.std(valid_similarities):.4f}, "
                   f"min={np.min(valid_similarities):.3f}, max={np.max(valid_similarities):.3f}")
             
-            # === [v90.96][DIAR] Local-τ + Sharp + EMA + Centroid-Inertia ===
-            # 前提：valid_similarities は shape=(T, K) の相関/コサイン類似度。tanh(*3) 適用済み。
-            T, K = valid_similarities.shape
-            
-            # 1) Local std から τ(t) を作る（短窓で分離コントラストを推定）
-            #    stdが低い→τを高めに（過剰分割抑制）、stdが高い→τを低めに（決定力UP）
-            win = 41  # ≈0.8s @50Hz（あなたのgrid_hz=50前提）
+        # === DIAR v90.96: Local-τ or Global-τ → interpolate once → return ===
+        T, K = valid_similarities.shape
+
+        # 低コントラストなら事前正規化 + tanh(×3)
+        global_std = float(np.std(valid_similarities))
+        if global_std < 0.05:
+            LOGGER.info("[DEBUG-DIAR] low variance (std=%.4f) → z-score + tanh*3", global_std)
+            valid_similarities = (valid_similarities - np.mean(valid_similarities, axis=1, keepdims=True)) / \
+                                 (np.std(valid_similarities, axis=1, keepdims=True) + 1e-6)
+            valid_similarities = np.tanh(valid_similarities * 3.0)
+            LOGGER.info("[DEBUG-DIAR] AFTER norm: std=%.4f, min=%.3f, max=%.3f",
+                        float(np.std(valid_similarities)),
+                        float(np.min(valid_similarities)), float(np.max(valid_similarities)))
+
+            # --- Local-τ (時間局所stdからτ(t)を生成) ---
+            win = 41  # ≈0.8s @50Hz
             if win % 2 == 0:
                 win += 1
             half = win // 2
-            
-            # valid_similarities を時間方向に std 計算（Kスピーカ平均の振幅で）
+
             loc_std = np.empty(T, dtype=np.float32)
             pad = np.pad(valid_similarities, ((half, half), (0, 0)), mode="edge")
             for t in range(T):
                 sl = pad[t:t+win]
                 loc_std[t] = np.std(sl, axis=1).mean()
-            
-            # τを std のレンジに応じて線形マッピング（要件に応じて調整可能）
-            #   std=0.05 → τ=0.65（平坦→過分割しがちなので温度高め＝soft化）
-            #   std=0.20 → τ=0.35（コントラスト十分→温度低め＝決定力）
+
             tau_min, tau_max = 0.35, 0.65
             std_lo, std_hi = 0.05, 0.20
             tau_t = tau_max - (np.clip(loc_std, std_lo, std_hi) - std_lo) * (tau_max - tau_min) / (std_hi - std_lo)
-            tau_t = tau_t.astype(np.float32)  # shape=(T,)
-            
-            # 2) 温度付き softmax（時間tごとに τ(t) を適用）
-            #    logits = valid_similarities / τ(t)
-            logits = valid_similarities / tau_t[:, None]
-            logits = logits - logits.max(axis=1, keepdims=True)  # 数値安定化
-            spk_probs = np.exp(logits)
-            spk_probs /= np.sum(spk_probs, axis=1, keepdims=True) + 1e-12  # shape=(T, K)
-            
-            # 3) 事後シャープ（弱ピークを強調しつつ、過剰分割はEMAで抑える）
-            gamma = 1.30
-            spk_probs = np.power(spk_probs, gamma)
-            spk_probs /= np.sum(spk_probs, axis=1, keepdims=True) + 1e-12
-            
-            # 4) EMA 平滑（過剰なスイッチを抑制）
-            #    alpha を小さくすると切替に粘り。音源によって 0.15〜0.30 を推奨。
-            alpha = 0.22
-            ema = np.empty_like(spk_probs)
-            ema[0] = spk_probs[0]
-            for t in range(1, T):
-                ema[t] = alpha * spk_probs[t] + (1.0 - alpha) * ema[t-1]
-            spk_probs = ema
-            
-            # 5) セントロイド慣性（前回重心とブレンドして attractor を安定化）
-            #    既存の centroids: shape=(K, D) がある前提。無ければスキップ。
-            try:
-                if centroids is not None:
-                    inertia = 0.70  # 0.6〜0.8推奨：大きいほど前回重心を保持して安定
-                    if not hasattr(self, "_prev_centroids") or self._prev_centroids is None or \
-                       getattr(self, "_prev_centroids", None) is None or \
-                       getattr(self, "_prev_centroids", None) is False:
-                        self._prev_centroids = centroids.copy()
-                    else:
-                        centroids = inertia * self._prev_centroids + (1.0 - inertia) * centroids
-                        self._prev_centroids = centroids.copy()
-            except NameError:
-                pass  # centroids がスコープ外なら黙って無視
+            tau_t = tau_t.astype(np.float32)  # (T,)
 
-            # 6) 診断ログ（あなたの既存ログと整合）
+            logits = valid_similarities / tau_t[:, None]
+            logits -= logits.max(axis=1, keepdims=True)
+            spk_valid = np.exp(logits)
+            spk_valid /= np.sum(spk_valid, axis=1, keepdims=True) + 1e-12
+
+            # 事後シャープ + EMA平滑
+            gamma = 1.30
+            spk_valid = np.power(spk_valid, gamma)
+            spk_valid /= np.sum(spk_valid, axis=1, keepdims=True) + 1e-12
+
+            alpha = 0.22
+            ema = np.empty_like(spk_valid)
+            ema[0] = spk_valid[0]
+            for t in range(1, T):
+                ema[t] = alpha * spk_valid[t] + (1.0 - alpha) * ema[t-1]
+            spk_valid = ema
+
             LOGGER.info("[DEBUG-DIAR-TAU] Local τ: min=%.2f, max=%.2f, mean=%.2f, std(valid_sims)=%.4f",
                         float(tau_t.min()), float(tau_t.max()), float(tau_t.mean()),
                         float(valid_similarities.std()))
-            mm = float(np.mean(np.max(spk_probs, axis=1)))
-            ent = float(-np.mean(np.sum(spk_probs * np.log(np.clip(spk_probs, 1e-9, 1.0)), axis=1)))
-            LOGGER.info("[SPK-PROBS] (post) mean_max=%.3f, mean_entropy=%.3f", mm, ent)
+        else:
+            # --- Global-τ（簡易で高速なパス） ---
+            tau_used = 0.4 if global_std < 0.08 else 0.6
+            LOGGER.info("[DEBUG-DIAR-TAU] Global τ used = %.2f (std=%.4f)", tau_used, global_std)
 
-            # 7) デバッグ支援（必要なら保存→即解放）
-            setattr(self, "last_probs", spk_probs)
-            LOGGER.info("[DEBUG-DIAR] last_probs available: shape=%s, mean_max=%.3f, entropy=%.3f",
-                        str(spk_probs.shape), mm, ent)
-            try:
-                del self.last_probs
-                LOGGER.debug("[DEBUG-DIAR] last_probs deleted to reduce memory footprint")
-            except Exception as e:
-                LOGGER.warning(f"[DEBUG-DIAR] could not delete last_probs: {e}")
+            logits = valid_similarities / tau_used
+            logits -= logits.max(axis=1, keepdims=True)
+            spk_valid = np.exp(logits)
+            spk_valid /= np.sum(spk_valid, axis=1, keepdims=True) + 1e-12
 
-            # === /[v90.96][DIAR] ===
-            
-            # === [v90.96-FIX] interpolate Local-τ probs to grid_times ===
-            interp_out = np.zeros((len(grid_times), K), dtype=np.float32)
-            for k in range(K):
-                interp_func = interp1d(valid_times, spk_probs[:, k], kind='linear', bounds_error=False, fill_value="extrapolate")
-                interp_out[:, k] = interp_func(grid_times)
-            spk_probs = interp_out  # replace with full-resolution probabilities
+            gamma = 1.30
+            spk_valid = np.power(spk_valid, gamma)
+            spk_valid /= np.sum(spk_valid, axis=1, keepdims=True) + 1e-12
 
-        for k in range(num_speakers):
-            interp_func = interp1d(valid_times, valid_similarities[:, k], kind='linear', bounds_error=False, fill_value="extrapolate")
-            spk_probs[:, k] = interp_func(grid_times)
-        
+        # === ここで spk_valid は (T, K). これを grid_times に一度だけ補間 ===
+        spk_probs = np.zeros((len(grid_times), K), dtype=np.float32)
+        for k in range(K):
+            fn = interp1d(valid_times, spk_valid[:, k], kind='linear', bounds_error=False, fill_value="extrapolate")
+            spk_probs[:, k] = fn(grid_times)
+
+        # 数値安定＆最終正規化（行方向で確率和=1）
+        spk_probs = np.clip(spk_probs, 1e-9, 1.0)
+        spk_probs /= np.sum(spk_probs, axis=1, keepdims=True)
+
         # --- diagnostics ---
         self.last_valid_sims = valid_similarities.copy()
+        mm = float(np.mean(np.max(spk_probs, axis=1)))
+        ent = float(-np.mean(np.sum(spk_probs * np.log(spk_probs + 1e-12), axis=1)))
+        LOGGER.info("[SPK-PROBS] final: mean_max=%.3f, mean_entropy=%.3f, shape=%s",
+                    mm, ent, str(spk_probs.shape))
 
+        return spk_probs
