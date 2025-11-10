@@ -57,6 +57,15 @@ def _merge_continuous_speaker_segments(segments: List, max_gap: float, min_dur: 
 def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_root_str: str) -> None:
     project_root = Path(project_root_str)
     
+    # === [AHE PATCH] 全GUIログをバッファにも保存する設定 ===
+    import io
+    LOG_BUFFER = io.StringIO()
+
+    class BufferHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            msg = self.format(record)
+            LOG_BUFFER.write(msg + "\n")
+
     class QueueHandler(logging.Handler):
         def __init__(self, q: Queue) -> None:
             super().__init__()
@@ -89,6 +98,11 @@ def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_roo
     
     logger.propagate = False
     logger.setLevel(logging.INFO)
+    
+    # === [AHE PATCH] バッファハンドラも同時に登録 ===
+    buffer_handler = BufferHandler()
+    buffer_handler.setFormatter(logging.Formatter('%(asctime)s-%(levelname)s-%(module)s: %(message)s', datefmt='%H:%M:%S'))
+    logger.addHandler(buffer_handler)
 
     original_stdout, original_stderr = sys.stdout, sys.stderr
     
@@ -123,8 +137,14 @@ def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_roo
 
     try:
         while True:
+            # === [AHE PATCH] 複数ジョブ実行時にバッファを毎回リセット ===
+            LOG_BUFFER.seek(0)
+            LOG_BUFFER.truncate(0)
+
             job = job_q.get()
-            if job is None: logger.info("Shutdown signal received."); break
+            if job is None: 
+                logger.info("Shutdown signal received.")
+                break
             try:
                 config_dict, audio_path = job
                 config = from_dict(data_class=AppConfig, data=config_dict, config=dacite_config)
@@ -211,6 +231,14 @@ def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_roo
                 report = generate_rich_perf_report(step_times, res)
                 logger.info("\n" + "\n".join(report))
                 (run_dir / "performance.log").write_text("\n".join(report), encoding="utf-8")
+                
+                # === [AHE PATCH] ジョブ全体のGUIログを performance.log に追記 ===
+                full_log_path = run_dir / "performance.log"
+                with open(full_log_path, "a", encoding="utf-8") as f:
+                    f.write("\n\n--- Full GUI Log ---\n")
+                    f.write(LOG_BUFFER.getvalue())
+                logger.info(f"[PIPELINE] Full GUI log appended to {full_log_path}")
+
                 result_q.put({"success": True, "output_dir": str(run_dir)})
             except Exception as e:
                 logger.error(f"Critical error in worker: {e}\n{traceback.format_exc()}")
