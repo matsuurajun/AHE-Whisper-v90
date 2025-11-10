@@ -56,6 +56,11 @@ class AlignerConfig:
     non_speech_th: float = 0.02
     grid_hz: int = 50
 
+    # --- v90.97 Smooth Aligner options ---
+    use_smooth_aligner: bool = True  # ← ON/OFF 切替用
+    smooth_alpha: float = 0.25       # EMA係数（時系列平滑）
+    smooth_gamma: float = 1.2        # ピーク強調係数
+
     def __post_init__(self) -> None:
         if not (0.0 <= self.non_speech_th <= 1.0):
             raise ValueError(f"non_speech_th must be in [0, 1], got {self.non_speech_th}")
