@@ -1,5 +1,9 @@
 # AHE-Whisper — Changelog
 
+
+## [v90.97]— 2025-11-12
+ * Added Smooth Aligner (α=0.40, γ=1.4) — fully stable across 3 runs (Jaccard=0.99)
+
 ## [v90.96] — 2025-11-10
 
 **Experimental Branch — `feature/v90.96_local-tau-smooth-align`**
