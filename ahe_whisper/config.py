@@ -59,7 +59,7 @@ class AlignerConfig:
     # --- v90.97 Smooth Aligner options ---
     use_smooth_aligner: bool = True  # ← ON/OFF 切替用
     smooth_alpha: float = 0.55       # EMA係数（時系列平滑）
-    smooth_gamma: float = 1.2        # ピーク強調係数
+    smooth_gamma: float = 1.4        # ピーク強調係数
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.non_speech_th <= 1.0):
