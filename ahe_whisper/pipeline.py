@@ -10,7 +10,7 @@ from typing import Dict, Any
 import mlx_whisper
 
 from ahe_whisper.config import AppConfig
-from ahe_whisper.embedding import build_ecapa_session, warmup_ecapa, ecapa_embed_batched
+from ahe_whisper.embedding import build_er2v2_session, warmup_er2v2, er2v2_embed_batched
 from ahe_whisper.vad import VAD
 from ahe_whisper.diarizer import Diarizer
 from ahe_whisper.aligner import OverlapDPAligner
@@ -58,13 +58,19 @@ def run(
 
         elif stage == "diar":
             ecapa_model_path = ensure_model_available('embedding', project_root)
-            LOGGER.info("[STAGE-DIAR] Running ECAPA embedding extraction...")
-            ecapa_sess = build_ecapa_session(ecapa_model_path, config.embedding)
-            warmup_ecapa(ecapa_sess)
+            LOGGER.info("[STAGE-DIAR] Running ERes2NetV2 embedding extraction...")
+            
+            # --- ER2V2 セッション作成 ---
+            er2_sess = build_er2v2_session(ecapa_model_path, config.embedding)
+            warmup_er2v2(er2_sess)
+            
             win_len = int(config.embedding.embedding_win_sec * sr)
             hop_len = int(config.embedding.embedding_hop_sec * sr)
             audio_chunks = [waveform[i:i+win_len] for i in range(0, len(waveform), hop_len)]
-            _ = ecapa_embed_batched(ecapa_sess, ecapa_model_path, audio_chunks, sr, config.embedding)
+            
+            # --- ER2V2 embedding 抽出 ---
+            _ = er2v2_embed_batched(er2_sess, ecapa_model_path, audio_chunks, sr, config.embedding)
+            
             return {"stage": "diar", "ok": True}
 
         else:
@@ -75,8 +81,8 @@ def run(
     vad_model_path = ensure_model_available('vad', project_root)
     ecapa_model_path = ensure_model_available('embedding', project_root)
     
-    ecapa_sess = build_ecapa_session(ecapa_model_path, config.embedding)
-    warmup_ecapa(ecapa_sess)
+    er2_sess = build_er2v2_session(ecapa_model_path, config.embedding)
+    warmup_er2v2(er2_sess)
     
     LOGGER.info(f"[DEBUG] calling mlx_whisper.transcribe: "
             f"no_speech_threshold={config.transcription.no_speech_threshold}, "
@@ -158,7 +164,13 @@ def run(
     hop_len = int(config.embedding.embedding_hop_sec * sr)
     audio_chunks = [waveform[i:i+win_len] for i in range(0, len(waveform), hop_len)]
     
-    embeddings = ecapa_embed_batched(ecapa_sess, ecapa_model_path, audio_chunks, sr, config.embedding) if audio_chunks else np.zeros((0, config.embedding.embedding_dim))
+    embeddings = er2v2_embed_batched(
+        er2_sess,
+        ecapa_model_path,
+        audio_chunks,
+        sr,
+        config.embedding
+    ) if audio_chunks else np.zeros((0, config.embedding.embedding_dim))
     
     valid_embeddings_mask = np.sum(np.abs(embeddings), axis=1) > 1e-6
     
