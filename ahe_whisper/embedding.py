@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-import numpy as np
-import onnxruntime as ort
+import logging
 from pathlib import Path
 from typing import List
-import logging
+
+import numpy as np
+import onnxruntime as ort
 
 from ahe_whisper.utils import safe_l2_normalize
 from ahe_whisper.features import Featurizer
@@ -14,22 +15,62 @@ LOGGER = logging.getLogger("ahe_whisper_worker")
 
 
 def build_er2v2_session(model_path: Path, config: EmbeddingConfig) -> ort.InferenceSession:
+    """
+    ERes2NetV2 用の ONNXRuntime セッションを構築する。
+    """
     sess_options = ort.SessionOptions()
     if config.intra_threads is not None:
-        sess_options.intra_op_num_threads = config.intra_threads
-    sess_options.inter_op_num_threads = config.inter_threads
+        sess_options.intra_op_num_threads = int(config.intra_threads)
+    if config.inter_threads is not None:
+        sess_options.inter_op_num_threads = int(config.inter_threads)
 
     providers = ["CPUExecutionProvider"]
-    if config.prefer_coreml_ep and "CoreMLExecutionProvider" in ort.get_available_providers():
+    available = ort.get_available_providers()
+    if config.prefer_coreml_ep and "CoreMLExecutionProvider" in available:
         providers.insert(0, "CoreMLExecutionProvider")
 
-    return ort.InferenceSession(str(model_path), sess_options, providers=providers)
+    LOGGER.info(
+        "[ER2V2] Building InferenceSession: model=%s, providers=%s, intra=%s, inter=%s",
+        str(model_path),
+        providers,
+        getattr(config, "intra_threads", None),
+        getattr(config, "inter_threads", None),
+    )
+    session = ort.InferenceSession(str(model_path), sess_options, providers=providers)
+
+    # 簡易ログ（入出力の確認）
+    try:
+        in0 = session.get_inputs()[0]
+        out0 = session.get_outputs()[0]
+        LOGGER.info(
+            "[ER2V2] IO signature: input(name=%s, shape=%s), output(name=%s, shape=%s)",
+            in0.name,
+            in0.shape,
+            out0.name,
+            out0.shape,
+        )
+    except Exception as e:
+        LOGGER.warning("[ER2V2] Failed to inspect IO signature: %s", e)
+
+    return session
 
 
 def warmup_er2v2(session: ort.InferenceSession) -> None:
-    input_name = session.get_inputs()[0].name  # "x"
-    dummy_input = np.random.randn(1, 200, 80).astype(np.float32)
-    session.run(None, {input_name: dummy_input})
+    """
+    ER2V2 のウォームアップ。短いダミー入力で一度 forward しておく。
+    """
+    try:
+        input_name = session.get_inputs()[0].name
+    except Exception as e:
+        LOGGER.warning("[ER2V2] warmup: failed to get input name: %s", e)
+        return
+
+    dummy = np.random.randn(1, 200, 80).astype(np.float32)
+    try:
+        _ = session.run(None, {input_name: dummy})
+        LOGGER.info("[ER2V2] Warmup done: dummy shape=%s", dummy.shape)
+    except Exception as e:
+        LOGGER.warning("[ER2V2] Warmup failed: %s", e)
 
 
 def er2v2_embed_batched(
@@ -37,73 +78,152 @@ def er2v2_embed_batched(
     model_path: Path,
     audio_chunks: List[np.ndarray],
     sr: int,
-    config: EmbeddingConfig
+    config: EmbeddingConfig,
 ) -> np.ndarray:
-    
-    # --- load frontend spec & CMVN ---
+    """
+    ERes2NetV2 で音声チャンク列からバッチ埋め込みを抽出する。
+    戻り値の shape は (len(audio_chunks), embedding_dim)。
+    無効チャンクの埋め込みは 0 ベクトル（L2 normalize 後も 0）になる。
+    """
+    num_chunks = len(audio_chunks)
+    emb_dim = int(config.embedding_dim)
+
+    if num_chunks == 0:
+        return np.zeros((0, emb_dim), dtype=np.float32)
+
+    # Frontend / CMVN 設定をモデルから復元
     spec, _ = load_spec_for_model(model_path)
     cmvn_policy = resolve_cmvn_policy(model_path.parent)
     featurizer = Featurizer(spec)
 
-    input_name = session.get_inputs()[0].name    # == "x"
-    output_name = session.get_outputs()[0].name  # == "embedding"
-    emb_dim = config.embedding_dim               # == 192
+    # ER2V2 は短すぎる入力で embedding が崩れるので minimum frame を設ける
+    # ここでは 40 フレーム（約 0.6s @ 10ms hop）を下限とする
+    min_frames = getattr(config, "min_frames", 40)
 
-    # --- Extract features ---
-    features = [
-        featurizer.get_mel_spectrogram(chunk, sr, cmvn_policy)
-        for chunk in audio_chunks
-    ]
+    LOGGER.info(
+        "[ER2V2] Starting embedding extraction: chunks=%d, sr=%d, min_frames=%d",
+        num_chunks,
+        sr,
+        min_frames,
+    )
 
-    valid_indices = [
-        i for i, f in enumerate(features)
-        if f is not None and f.shape[0] > 0
-    ]
+    # まず全チャンクを fbank 特徴に変換
+    features = []
+    valid_indices = []
+    for idx, chunk in enumerate(audio_chunks):
+        if chunk is None or len(chunk) == 0:
+            features.append(None)
+            continue
 
-    final_embeddings = np.zeros((len(audio_chunks), emb_dim), dtype=np.float32)
+        feat = featurizer.get_mel_spectrogram(chunk, sr, cmvn_policy)
+
+        if feat is None or feat.shape[0] < min_frames:
+            # 短すぎる or 失敗したチャンクは無効扱い
+            LOGGER.debug(
+                "[ER2V2] Skip chunk=%d: feat is None or too short (frames=%s)",
+                idx,
+                None if feat is None else feat.shape[0],
+            )
+            features.append(None)
+            continue
+
+        # float32 を保証
+        feat = feat.astype(np.float32, copy=False)
+        features.append(feat)
+        valid_indices.append(idx)
+
+    final_embeddings = np.zeros((num_chunks, emb_dim), dtype=np.float32)
 
     if not valid_indices:
+        LOGGER.warning("[ER2V2] No valid feature chunks. Returning all-zero embeddings.")
         return final_embeddings
 
+    # 有効特徴だけをまとめてバケット化 → padding 付きで一括推論
     valid_features = [features[i] for i in valid_indices]
     feat_lens = [f.shape[0] for f in valid_features]
 
     order = np.argsort(feat_lens)
     buffer = np.zeros((len(valid_features), emb_dim), dtype=np.float32)
 
+    input_name = session.get_inputs()[0].name
+    output_name = session.get_outputs()[0].name
+
+    batch_cap = int(getattr(config, "batch_cap", 16))
+    bucket_step = int(getattr(config, "bucket_step", 40))
+
     batch_start = 0
     while batch_start < len(order):
         curr_len = feat_lens[order[batch_start]]
-        bucket_max = ((curr_len // config.bucket_step) + 1) * config.bucket_step
+        bucket_max = ((curr_len // bucket_step) + 1) * bucket_step
 
         batch_end = batch_start
         while (
             batch_end < len(order)
             and feat_lens[order[batch_end]] <= bucket_max
-            and (batch_end - batch_start) < config.batch_cap
+            and (batch_end - batch_start) < batch_cap
         ):
             batch_end += 1
 
         idxs = order[batch_start:batch_end]
-        max_len = feat_lens[idxs[-1]]
+        max_len = max(feat_lens[i] for i in idxs)
 
-        batch_input = np.zeros(
-            (len(idxs), max_len, 80), dtype=np.float32
+        batch_size = len(idxs)
+        batch_input = np.zeros((batch_size, max_len, spec.num_mels), dtype=np.float32)
+
+        # padding は 0 ではなく「各チャンクの最後のフレームを繰り返す」
+        for bi, fi in enumerate(idxs):
+            feat = valid_features[fi]
+            t = feat.shape[0]
+            batch_input[bi, :t, :] = feat
+            if t < max_len:
+                last_frame = feat[t - 1 : t, :]
+                repeat = max_len - t
+                batch_input[bi, t:, :] = last_frame.repeat(repeat, axis=0)
+
+        LOGGER.debug(
+            "[ER2V2] Inference batch: size=%d, max_len=%d, bucket_max=%d",
+            batch_size,
+            max_len,
+            bucket_max,
         )
 
-        for i, idx in enumerate(idxs):
-            feat = valid_features[idx]
-            batch_input[i, :feat.shape[0], :] = feat
+        try:
+            outputs = session.run([output_name], {input_name: batch_input})[0]
+        except Exception as e:
+            LOGGER.error("[ER2V2] Inference failed on batch [%d:%d]: %s", batch_start, batch_end, e)
+            # 失敗したバッチは 0 ベクトルのままにして先に進む
+            batch_start = batch_end
+            continue
 
-        outputs = session.run([output_name], {input_name: batch_input})[0]
+        if outputs.ndim == 3:
+            # (B, T, D) の場合はフレーム平均
+            outputs = outputs.mean(axis=1)
 
-        for i, idx in enumerate(idxs):
-            buffer[idx, :] = outputs[i]
+        if outputs.shape[0] != batch_size or outputs.shape[1] != emb_dim:
+            LOGGER.warning(
+                "[ER2V2] Unexpected output shape: got=%s, expect=(%d, %d)",
+                outputs.shape,
+                batch_size,
+                emb_dim,
+            )
+
+        for bi, fi in enumerate(idxs):
+            if bi < outputs.shape[0]:
+                buffer[fi, :] = outputs[bi]
 
         batch_start = batch_end
 
+    # valid_indices を元に元の順序へ戻す
     for i, orig_idx in enumerate(valid_indices):
         final_embeddings[orig_idx, :] = buffer[i]
 
-    # --- 重要：必ず L2 normalize ---
-    return safe_l2_normalize(final_embeddings.astype(np.float32))
+    # 最後に L2 normalize（全ての行に対して安全に）
+    final_embeddings = safe_l2_normalize(final_embeddings.astype(np.float32))
+
+    LOGGER.info(
+        "[ER2V2] Embedding extraction done: valid=%d / %d, emb_dim=%d",
+        len(valid_indices),
+        num_chunks,
+        emb_dim,
+    )
+    return final_embeddings
