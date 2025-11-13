@@ -41,7 +41,7 @@ class Diarizer:
 
         for tau in self.config.em_tau_schedule:
             similarities = embeddings @ attractors.T
-            responsibilities = safe_softmax(similarities, tau)
+            responsibilities = safe_softmax(similarities, tau * 0.75)  # ER2V2: similarity 高め → tau を下げて硬さUP
             
             new_attractors = np.zeros_like(attractors)
             for i in range(k):
@@ -160,7 +160,7 @@ class Diarizer:
             spk_valid /= np.sum(spk_valid, axis=1, keepdims=True) + 1e-12
 
             # 事後シャープ + EMA平滑（ワンショット実験 gamma=1.55 / alpha=0.30）
-            gamma = 1.55
+            gamma = 1.20  # ER2V2: embedding分布がシャープ → 過度な硬さ抑える
             spk_valid = np.power(spk_valid, gamma)
             spk_valid /= np.sum(spk_valid, axis=1, keepdims=True) + 1e-12
 
@@ -176,7 +176,7 @@ class Diarizer:
                         float(valid_similarities.std()))
         else:
             # --- Global-τ（簡易で高速なパス） ---
-            tau_used = 0.4 if global_std < 0.08 else 0.6
+            tau_used = 0.28  # ER2V2 推奨: 0.25–0.30
             LOGGER.info("[DEBUG-DIAR-TAU] Global τ used = %.2f (std=%.4f)", tau_used, global_std)
 
             logits = valid_similarities / tau_used
@@ -184,7 +184,7 @@ class Diarizer:
             spk_valid = np.exp(logits)
             spk_valid /= np.sum(spk_valid, axis=1, keepdims=True) + 1e-12
 
-            gamma = 1.30
+            gamma = 1.15  # ER2V2：過シャープ化防止
             spk_valid = np.power(spk_valid, gamma)
             spk_valid /= np.sum(spk_valid, axis=1, keepdims=True) + 1e-12
 
