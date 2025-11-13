@@ -80,11 +80,6 @@ def er2v2_embed_batched(
     sr: int,
     config: EmbeddingConfig,
 ) -> np.ndarray:
-    """
-    ERes2NetV2 で音声チャンク列からバッチ埋め込みを抽出する。
-    戻り値の shape は (len(audio_chunks), embedding_dim)。
-    無効チャンクの埋め込みは 0 ベクトル（L2 normalize 後も 0）になる。
-    """
     num_chunks = len(audio_chunks)
     emb_dim = int(config.embedding_dim)
 
@@ -97,14 +92,11 @@ def er2v2_embed_batched(
     featurizer = Featurizer(spec)
 
     # ER2V2 は短すぎる入力で embedding が崩れるので minimum frame を設ける
-    # ここでは 40 フレーム（約 0.6s @ 10ms hop）を下限とする
     min_frames = getattr(config, "min_frames", 40)
 
     LOGGER.info(
         "[ER2V2] Starting embedding extraction: chunks=%d, sr=%d, min_frames=%d",
-        num_chunks,
-        sr,
-        min_frames,
+        num_chunks, sr, min_frames,
     )
 
     # まず全チャンクを fbank 特徴に変換
@@ -116,31 +108,38 @@ def er2v2_embed_batched(
             continue
 
         feat = featurizer.get_mel_spectrogram(chunk, sr, cmvn_policy)
-
         if feat is None or feat.shape[0] < min_frames:
-            # 短すぎる or 失敗したチャンクは無効扱い
-            LOGGER.debug(
-                "[ER2V2] Skip chunk=%d: feat is None or too short (frames=%s)",
-                idx,
-                None if feat is None else feat.shape[0],
-            )
+            LOGGER.debug("[ER2V2] Skip chunk=%d: feat is None or too short (frames=%s)",
+                         idx, None if feat is None else feat.shape[0])
             features.append(None)
             continue
 
-        # float32 を保証
         feat = feat.astype(np.float32, copy=False)
         features.append(feat)
         valid_indices.append(idx)
 
     final_embeddings = np.zeros((num_chunks, emb_dim), dtype=np.float32)
-
     if not valid_indices:
         LOGGER.warning("[ER2V2] No valid feature chunks. Returning all-zero embeddings.")
         return final_embeddings
 
-    # 有効特徴だけをまとめてバケット化 → padding 付きで一括推論
     valid_features = [features[i] for i in valid_indices]
     feat_lens = [f.shape[0] for f in valid_features]
+
+    # === NEW: mel_dim を堅牢に決定 ===
+    mel_dim = int(valid_features[0].shape[1])
+    for k in ("num_mels", "n_mels", "mel_bins", "feature_dim", "dim"):
+        if hasattr(spec, k):
+            try:
+                v = int(getattr(spec, k))
+                if v > 0:
+                    mel_dim = v
+                    break
+            except Exception:
+                pass
+    if mel_dim <= 0:
+        mel_dim = 80
+    LOGGER.info("[ER2V2] batching with mel_dim=%d", mel_dim)
 
     order = np.argsort(feat_lens)
     buffer = np.zeros((len(valid_features), emb_dim), dtype=np.float32)
@@ -166,46 +165,39 @@ def er2v2_embed_batched(
 
         idxs = order[batch_start:batch_end]
         max_len = max(feat_lens[i] for i in idxs)
-
         batch_size = len(idxs)
-        batch_input = np.zeros((batch_size, max_len, spec.num_mels), dtype=np.float32)
 
-        # padding は 0 ではなく「各チャンクの最後のフレームを繰り返す」
+        # === CHANGED: spec.num_mels → mel_dim
+        batch_input = np.zeros((batch_size, max_len, mel_dim), dtype=np.float32)
+
+        # === CHANGED: 列数不一致の安全コピー + 最終フレーム繰り返しで時間方向をパディング
         for bi, fi in enumerate(idxs):
-            feat = valid_features[fi]
-            t = feat.shape[0]
-            batch_input[bi, :t, :] = feat
+            feat = valid_features[fi]  # (T_i, F_feat)
+            t, f = feat.shape
+            use_cols = min(mel_dim, f)
+            batch_input[bi, :t, :use_cols] = feat[:, :use_cols]
             if t < max_len:
-                last_frame = feat[t - 1 : t, :]
+                last_frame = batch_input[bi, t - 1 : t, :use_cols]
                 repeat = max_len - t
-                batch_input[bi, t:, :] = last_frame.repeat(repeat, axis=0)
+                batch_input[bi, t:, :use_cols] = last_frame.repeat(repeat, axis=0)
 
-        LOGGER.debug(
-            "[ER2V2] Inference batch: size=%d, max_len=%d, bucket_max=%d",
-            batch_size,
-            max_len,
-            bucket_max,
-        )
+        LOGGER.debug("[ER2V2] Inference batch: size=%d, max_len=%d, bucket_max=%d",
+                     batch_size, max_len, bucket_max)
 
         try:
             outputs = session.run([output_name], {input_name: batch_input})[0]
         except Exception as e:
-            LOGGER.error("[ER2V2] Inference failed on batch [%d:%d]: %s", batch_start, batch_end, e)
-            # 失敗したバッチは 0 ベクトルのままにして先に進む
+            LOGGER.error("[ER2V2] Inference failed on batch [%d:%d]: %s",
+                         batch_start, batch_end, e)
             batch_start = batch_end
             continue
 
         if outputs.ndim == 3:
-            # (B, T, D) の場合はフレーム平均
             outputs = outputs.mean(axis=1)
 
         if outputs.shape[0] != batch_size or outputs.shape[1] != emb_dim:
-            LOGGER.warning(
-                "[ER2V2] Unexpected output shape: got=%s, expect=(%d, %d)",
-                outputs.shape,
-                batch_size,
-                emb_dim,
-            )
+            LOGGER.warning("[ER2V2] Unexpected output shape: got=%s, expect=(%d, %d)",
+                           outputs.shape, batch_size, emb_dim)
 
         for bi, fi in enumerate(idxs):
             if bi < outputs.shape[0]:
@@ -213,17 +205,10 @@ def er2v2_embed_batched(
 
         batch_start = batch_end
 
-    # valid_indices を元に元の順序へ戻す
     for i, orig_idx in enumerate(valid_indices):
         final_embeddings[orig_idx, :] = buffer[i]
 
-    # 最後に L2 normalize（全ての行に対して安全に）
     final_embeddings = safe_l2_normalize(final_embeddings.astype(np.float32))
-
-    LOGGER.info(
-        "[ER2V2] Embedding extraction done: valid=%d / %d, emb_dim=%d",
-        len(valid_indices),
-        num_chunks,
-        emb_dim,
-    )
+    LOGGER.info("[ER2V2] Embedding extraction done: valid=%d / %d, emb_dim=%d",
+                len(valid_indices), num_chunks, emb_dim)
     return final_embeddings
