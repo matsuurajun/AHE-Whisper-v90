@@ -28,10 +28,10 @@ class DiarizationConfig:
     vad_th_start: float = 0.50
     vad_th_end: float = 0.20
     em_tau_schedule: List[float] = field(default_factory=lambda: [10.0, 5.0, 3.0])
-    min_speaker_duration_sec: float = 1.0
-    min_fallback_duration_sec: float = 1.0
-    min_speech_sec: float = 0.2
-    max_merge_gap_sec: float = 1.0
+    min_speaker_duration_sec: float = 2.0
+    min_fallback_duration_sec: float = 1.5
+    min_speech_sec: float = 0.3
+    max_merge_gap_sec: float = 1.5
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.vad_th_start <= 1.0):
@@ -49,10 +49,10 @@ class VadConfig:
 
 @dataclass
 class AlignerConfig:
-    alpha: float = 0.5
-    beta: float = 0.3
-    gamma: float = 0.5
-    delta_switch: float = 0.1
+    alpha: float = 0.6
+    beta: float = 0.25
+    gamma: float = 0.4
+    delta_switch: float = 0.15
     non_speech_th: float = 0.02
     grid_hz: int = 50
 
