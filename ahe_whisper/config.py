@@ -12,13 +12,13 @@ class TranscriptionConfig:
 @dataclass
 class EmbeddingConfig:
     embedding_dim: int = 192
-    batch_cap: int = 4
+    batch_cap: int = 8
     bucket_step: int = 80
     prefer_coreml_ep: bool = False
     intra_threads: Optional[int] = None
     inter_threads: int = 1
-    embedding_win_sec: float = 1.5
-    embedding_hop_sec: float = 0.75
+    embedding_win_sec: float = 2.0
+    embedding_hop_sec: float = 1.0
 
 @dataclass
 class DiarizationConfig:
