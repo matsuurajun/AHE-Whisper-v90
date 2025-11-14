@@ -84,7 +84,10 @@ def er2v2_embed_batched(
     emb_dim = int(config.embedding_dim)
 
     if num_chunks == 0:
-        return np.zeros((0, emb_dim), dtype=np.float32)
+        return (
+            np.zeros((0, emb_dim), dtype=np.float32),
+            np.zeros(0, dtype=bool),
+        )
 
     # Frontend / CMVN 設定をモデルから復元
     spec, _ = load_spec_for_model(model_path)
@@ -121,7 +124,8 @@ def er2v2_embed_batched(
     final_embeddings = np.zeros((num_chunks, emb_dim), dtype=np.float32)
     if not valid_indices:
         LOGGER.warning("[ER2V2] No valid feature chunks. Returning all-zero embeddings.")
-        return final_embeddings
+        valid_mask = np.zeros(num_chunks, dtype=bool)
+        return final_embeddings, valid_mask
 
     valid_features = [features[i] for i in valid_indices]
     feat_lens = [f.shape[0] for f in valid_features]
@@ -211,4 +215,7 @@ def er2v2_embed_batched(
     final_embeddings = safe_l2_normalize(final_embeddings.astype(np.float32))
     LOGGER.info("[ER2V2] Embedding extraction done: valid=%d / %d, emb_dim=%d",
                 len(valid_indices), num_chunks, emb_dim)
-    return final_embeddings
+    valid_mask = np.zeros(num_chunks, dtype=bool)
+    valid_mask[valid_indices] = True
+    
+    return final_embeddings, valid_mask
