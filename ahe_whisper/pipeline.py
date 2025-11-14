@@ -164,15 +164,17 @@ def run(
     hop_len = int(config.embedding.embedding_hop_sec * sr)
     audio_chunks = [waveform[i:i+win_len] for i in range(0, len(waveform), hop_len)]
     
-    embeddings = er2v2_embed_batched(
-        er2_sess,
-        ecapa_model_path,
-        audio_chunks,
-        sr,
-        config.embedding
-    ) if audio_chunks else np.zeros((0, config.embedding.embedding_dim))
-    
-    valid_embeddings_mask = np.sum(np.abs(embeddings), axis=1) > 1e-6
+    if audio_chunks:
+        embeddings, valid_embeddings_mask = er2v2_embed_batched(
+            er2_sess,
+            ecapa_model_path,
+            audio_chunks,
+            sr,
+            config.embedding
+        )
+    else:
+        embeddings = np.zeros((0, config.embedding.embedding_dim), dtype=np.float32)
+        valid_embeddings_mask = np.zeros(0, dtype=bool)
     
     is_fallback = False
     if not np.any(valid_embeddings_mask):
