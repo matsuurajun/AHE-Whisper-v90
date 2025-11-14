@@ -283,6 +283,16 @@ def run(
         
         speaker_segments = aligner.align(words, vad_probs, spk_probs, grid_times)
         
+        # --- normalize speaker_segments (tuple → dict) (★これを1回だけ) ---
+        if speaker_segments and isinstance(speaker_segments[0], (list, tuple)):
+            speaker_segments = [
+                {"start": float(s), "end": float(e), "speaker": f"SPEAKER_{int(spk):02d}"}
+                for s, e, spk in speaker_segments
+            ]
+            LOGGER.info(f"[PIPELINE-FIX] Normalized speaker_segments to dict list: {len(speaker_segments)} items")
+        elif not speaker_segments:
+            LOGGER.warning("[PIPELINE-FIX] speaker_segments is empty before merge")
+
         # --- NEW: post-merge for short segments (v34-like behavior) ---
         def merge_short_segments(segments, min_len=2.0):
             if not segments or not isinstance(segments[0], dict):
@@ -316,12 +326,12 @@ def run(
         LOGGER.info(f"[POST-MERGE] segments after merge_short={len(speaker_segments)}")
         
         # --- ALIGNMENT SANITY CHECK: ended too early? ---
-        if speaker_segments and isinstance(speaker_segments[-1], dict) and speaker_segments[-1]["end"] < duration_sec * 0.9:
+        if speaker_segments and speaker_segments[-1]["end"] < duration_sec * 0.9:
             LOGGER.warning(
                 f"[ALIGNER-FIX] alignment ended early at {speaker_segments[-1]['end']:.1f}s (<90% of audio). Expanding fallback."
             )
             speaker_segments = [{"start": 0.0, "end": duration_sec, "speaker": "SPEAKER_00"}]
-    
+
     words = group_words_sudachi(words)
     add_metric("asr.word_count", len(words))
 
@@ -332,10 +342,6 @@ def run(
         is_fallback = True
 
     add_metric("pipeline.total_time_sec", time.perf_counter() - t0)
-    
-    # --- normalize speaker_segments for exporter ---
-    if not speaker_segments:
-        LOGGER.warning("[PIPELINE-FIX] speaker_segments is empty at export stage")
     
     # --- reconstruct text for exporter if missing ---
     if "text" not in locals() or not isinstance(asr_result.get("text"), str) or not asr_result["text"].strip():
