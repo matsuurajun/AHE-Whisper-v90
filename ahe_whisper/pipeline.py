@@ -283,23 +283,39 @@ def run(
         
         speaker_segments = aligner.align(words, vad_probs, spk_probs, grid_times)
         
-        # --- Speaker distribution summary (追加ブロック②) ---
-        if speaker_segments and isinstance(speaker_segments[0], (list, tuple)):
-            spks = [int(s[2]) for s in speaker_segments if len(s) == 3]
-            if spks:
-                unique, counts = np.unique(spks, return_counts=True)
-                LOGGER.info("[ALIGNER-STATS] speakers=%s", dict(zip(unique.tolist(), counts.tolist())))
+        # --- NEW: post-merge for short segments (v34-like behavior) ---
+        def merge_short_segments(segments, min_len=2.0):
+            if not segments or not isinstance(segments[0], dict):
+                return segments
+            
+            merged = []
+            prev = segments[0]
+            for cur in segments[1:]:
+                if (prev["speaker"] == cur["speaker"]) and ((cur["end"] - prev["end"]) < 0.5):
+                    # 同一スピーカーで 0.5秒未満の隙間 → マージ
+                    prev["end"] = cur["end"]
+                    continue
+                
+                # 短すぎるセグメントの場合 → 次の話者とマージ
+                if (prev["end"] - prev["start"]) < min_len:
+                    cur["start"] = min(prev["start"], cur["start"])
+                else:
+                    merged.append(prev)
+                
+                prev = cur
+            
+            # 最終セグメントチェック
+            if (prev["end"] - prev["start"]) < min_len and merged:
+                merged[-1]["end"] = prev["end"]
+            else:
+                merged.append(prev)
+            
+            return merged
         
-        # --- after aligner.align(...) ---
-        if speaker_segments and isinstance(speaker_segments[0], (list, tuple)) and len(speaker_segments[0]) == 3:
-            speaker_segments = [
-                {"start": s, "end": e, "speaker": f"SPEAKER_{spk:02d}"}
-                for s, e, spk in speaker_segments
-            ]
-            LOGGER.info(f"[PIPELINE] Aligner produced {len(speaker_segments)} speaker segments")
-        else:
-            LOGGER.warning(f"[PIPELINE] Unexpected speaker_segments structure: {type(speaker_segments)}")
-
+        speaker_segments = merge_short_segments(speaker_segments, min_len=2.0)
+        LOGGER.info(f"[POST-MERGE] segments after merge_short={len(speaker_segments)}")
+        
+        # --- ALIGNMENT SANITY CHECK: ended too early? ---
         if speaker_segments and isinstance(speaker_segments[-1], dict) and speaker_segments[-1]["end"] < duration_sec * 0.9:
             LOGGER.warning(
                 f"[ALIGNER-FIX] alignment ended early at {speaker_segments[-1]['end']:.1f}s (<90% of audio). Expanding fallback."
@@ -318,13 +334,7 @@ def run(
     add_metric("pipeline.total_time_sec", time.perf_counter() - t0)
     
     # --- normalize speaker_segments for exporter ---
-    if speaker_segments and isinstance(speaker_segments[0], (list, tuple)) and len(speaker_segments[0]) == 3:
-        speaker_segments = [
-            {"start": float(s), "end": float(e), "speaker": f"SPEAKER_{int(spk):02d}"}
-            for s, e, spk in speaker_segments
-        ]
-        LOGGER.info(f"[PIPELINE-FIX] Normalized speaker_segments to dict list: {len(speaker_segments)} items")
-    elif not speaker_segments:
+    if not speaker_segments:
         LOGGER.warning("[PIPELINE-FIX] speaker_segments is empty at export stage")
     
     # --- reconstruct text for exporter if missing ---
