@@ -51,7 +51,7 @@ class VadConfig:
 class AlignerConfig:
     alpha: float = 0.6
     beta: float = 0.25
-    gamma: float = 0.4
+    gamma: float = 1.4
     delta_switch: float = 0.15
     non_speech_th: float = 0.02
     grid_hz: int = 50
