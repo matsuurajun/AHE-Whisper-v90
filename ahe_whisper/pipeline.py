@@ -232,8 +232,8 @@ def run(
         spk_probs = np.clip(spk_probs, 0.0, 1.0)
         
         # コントラスト強調
-        spk_probs = (spk_probs - 0.5) * scale + 0.5
-        spk_probs = np.clip(spk_probs, 0.0, 1.0)
+        #spk_probs = (spk_probs - 0.5) * scale + 0.5
+        #spk_probs = np.clip(spk_probs, 0.0, 1.0)
         
         max_per_row = np.max(spk_probs, axis=1, keepdims=True)
         spk_probs = np.exp((spk_probs - max_per_row) / tau)
