@@ -5,10 +5,13 @@ from typing import Dict, Any
 
 MODELS: Dict[str, Dict[str, Any]] = {
     "embedding": {
-        "repo_id": "Wespeaker/wespeaker-ecapa-tdnn512-LM",
+        "repo_id": "Wespeaker/speaker-embedding-models",
         #"revision": "90233509ddc5368a88f53c9e3650646c0f065355",
-        "required_files": ["voxceleb_ECAPA512_LM.onnx", "config.yaml"],
-        "primary_file": "voxceleb_ECAPA512_LM.onnx"
+        "required_files": [
+            "3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx",
+            "config.yaml"
+        ],
+        "primary_file": "3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx"
     },
     "vad": {
         "repo_id": "onnx-community/silero-vad",
