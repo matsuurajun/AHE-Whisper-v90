@@ -220,7 +220,7 @@ def run(
             LOGGER.warning("[DEBUG-DIAR] could not inspect valid_sims: %s", str(e))
 
         # --- Improved normalization with contrast scaling + temperature ---
-        tau = 0.4
+        tau = 1.0
         scale = 3.0  # <= 新規追加：分散を増幅
         
         # --- sanity log ---
@@ -250,14 +250,14 @@ def run(
         # --- Mini Enhancement: Stabilize speaker transition detection ---
         # 強制的に話者確率分布にスパース性を導入
         entropy = -np.sum(spk_probs * np.log(spk_probs + 1e-8), axis=1)
-        low_entropy_mask = entropy < 1.5  # 信頼度高い領域
-        spk_probs[low_entropy_mask] *= 1.1
+        #low_entropy_mask = entropy < 1.5  # 信頼度高い領域
+        #spk_probs[low_entropy_mask] *= 1.1
         spk_probs = np.clip(spk_probs, 0.0, 1.0)
         
         # 相対差が小さいフレームを減衰
-        margin = np.max(spk_probs, axis=1) - np.partition(spk_probs, -2, axis=1)[:, -2]
-        low_margin_mask = margin < 0.1
-        spk_probs[low_margin_mask] *= 0.8
+        #margin = np.max(spk_probs, axis=1) - np.partition(spk_probs, -2, axis=1)[:, -2]
+        #low_margin_mask = margin < 0.1
+        #spk_probs[low_margin_mask] *= 0.8
 
         # Aligner tuning for better switching
         config.aligner.delta_switch = 0.1
