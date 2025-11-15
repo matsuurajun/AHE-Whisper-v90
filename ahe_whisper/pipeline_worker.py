@@ -159,9 +159,6 @@ def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_roo
                 
                 logger.info(f"--- Job Start: {Path(audio_path).name} ---")
                 reset_metrics()
-                #res = run_ai_pipeline(audio_path, config, project_root)
-                #step_times.append(("Core AI Pipeline", time.perf_counter() - t_start))
-                # --- Stage-by-stage measurement ---
                 step_times = []
                                 
                 # --- ASR ---
