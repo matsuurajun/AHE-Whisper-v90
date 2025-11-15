@@ -201,15 +201,45 @@ def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_roo
                 
                 # --- attach text to each segment for export ---
                 if "speaker_segments" in res and "words" in res:
-                    for seg in res["speaker_segments"]:
-                        seg_words = [
-                            w.get("word", w.get("text", ""))  # 安全に取得
-                            for w in res.get("words", [])
-                            if isinstance(w, dict) and seg["start"] <= w.get("start", 0) < seg["end"]
-                        ]
+                    words_list = res.get("words", [])
+                    n_words = len(words_list)
+                    
+                    # 各 word index が「どこかのセグメントにすでに割り当て済みか」を記録
+                    assigned = [False] * n_words
+                    
+                    for seg_idx, seg in enumerate(res["speaker_segments"]):
+                        seg_words = []
+                        
+                        for idx, w in enumerate(words_list):
+                            if assigned[idx]:
+                                # すでに別セグメントに割り当て済みのフレーズは再利用しない
+                                continue
+                            if not isinstance(w, dict):
+                                continue
+                            
+                            w_start = w.get("start")
+                            if w_start is None:
+                                continue
+                            
+                            # このセグメントの時間幅に含まれるフレーズかどうか
+                            if seg.get("start", 0.0) <= w_start < seg.get("end", 0.0):
+                                text_piece = w.get("word", w.get("text", ""))
+                                if text_piece:
+                                    seg_words.append(text_piece)
+                                    assigned[idx] = True  # ここでこのフレーズはこのセグメント専属になる
+                                    
                         seg["text"] = "".join(seg_words).strip()
+                        
                     valid_segs = [s for s in res["speaker_segments"] if s.get("text")]
-                    logger.info(f"[PIPELINE-WORKER] Segments with text: {len(valid_segs)} / {len(res['speaker_segments'])}")
+                    used_words = sum(1 for x in assigned if x)
+                    logger.info(
+                        "[PIPELINE-WORKER] Segments with text: %d / %d, "
+                        "assigned_phrases=%d / %d",
+                        len(valid_segs),
+                        len(res["speaker_segments"]),
+                        used_words,
+                        n_words,
+                    )
                     
                     # --- ensure backward-compatible format for exporter ---
                     if "speaker_segments" in res and isinstance(res["speaker_segments"], list):
