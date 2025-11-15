@@ -90,7 +90,6 @@ def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_roo
             raise io.UnsupportedOperation("fileno")
 
     logger = logging.getLogger("ahe_whisper_worker")
-    logger.info(f"[DEBUG] pipeline_worker module path: {__file__}")
     handler = QueueHandler(log_q)
     handler.setFormatter(logging.Formatter('%(asctime)s-%(levelname)s-%(module)s: %(message)s', datefmt='%H:%M:%S'))
     
@@ -99,6 +98,8 @@ def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_roo
     
     logger.propagate = False
     logger.setLevel(logging.INFO)
+    
+    logger.info(f"[DEBUG] pipeline_worker module path: {__file__}")
     
     # === [AHE PATCH] バッファハンドラも同時に登録 ===
     buffer_handler = BufferHandler()
