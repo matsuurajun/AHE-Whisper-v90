@@ -91,20 +91,26 @@ def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_roo
 
     logger = logging.getLogger("ahe_whisper_worker")
     handler = QueueHandler(log_q)
-    handler.setFormatter(logging.Formatter('%(asctime)s-%(levelname)s-%(module)s: %(message)s', datefmt='%H:%M:%S'))
-    
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s-%(levelname)s-%(module)s: %(message)s',
+        datefmt='%H:%M:%S'
+    ))
+     
     if not any(getattr(h, "_ahe_queue_handler", False) for h in logger.handlers):
         logger.addHandler(handler)
-    
+
     logger.propagate = False
     logger.setLevel(logging.INFO)
     
-    logger.info(f"[DEBUG] pipeline_worker module path: {__file__}")
-    
-    # === [AHE PATCH] バッファハンドラも同時に登録 ===
+    # バッファハンドラ追加（1 回だけ）
     buffer_handler = BufferHandler()
-    buffer_handler.setFormatter(logging.Formatter('%(asctime)s-%(levelname)s-%(module)s: %(message)s', datefmt='%H:%M:%S'))
+    buffer_handler.setFormatter(logging.Formatter(
+        '%(asctime)s-%(levelname)s-%(module)s: %(message)s',
+        datefmt='%H:%M:%S'
+    ))
     logger.addHandler(buffer_handler)
+    
+    logger.info(f"[DEBUG] pipeline_worker module path: {__file__}")
 
     original_stdout, original_stderr = sys.stdout, sys.stderr
     
@@ -153,13 +159,11 @@ def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_roo
                 
                 logger.info(f"--- Job Start: {Path(audio_path).name} ---")
                 reset_metrics()
-                step_times, t_start = [], time.perf_counter()
                 #res = run_ai_pipeline(audio_path, config, project_root)
                 #step_times.append(("Core AI Pipeline", time.perf_counter() - t_start))
                 # --- Stage-by-stage measurement ---
                 step_times = []
-                t_total_start = time.perf_counter()
-                
+                                
                 # --- ASR ---
                 t_asr = time.perf_counter()
                 run_ai_pipeline(audio_path, config, project_root, stage="asr")
