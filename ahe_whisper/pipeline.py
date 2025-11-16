@@ -156,7 +156,13 @@ def run(
 
     if not words:
         LOGGER.warning("Whisper detected no words. Aborting diarization.")
-        return {"words": [], "speaker_segments": [], "duration_sec": duration_sec, "metrics": get_metrics(), "is_fallback": True}
+        return {
+            "words": [],
+            "speaker_segments": [],
+            "duration_sec": duration_sec,
+            "metrics": get_metrics(),
+            "is_fallback": True,
+        }
     
     asr_words = words
 
@@ -165,13 +171,54 @@ def run(
     audio_chunks = [waveform[i:i+win_len] for i in range(0, len(waveform), hop_len)]
     
     if audio_chunks:
+        # --- VAD をチャンク単位に要約（平均 speech prob） ---
+        chunk_speech_scores = []
+        for idx in range(len(audio_chunks)):
+            chunk_start_t = (idx * hop_len) / sr
+            chunk_end_t = min(chunk_start_t + win_len / sr, duration_sec)
+
+            frame_indices = [
+                j for j, t in enumerate(grid_times)
+                if (t >= chunk_start_t) and (t < chunk_end_t)
+            ]
+            if frame_indices:
+                score = float(np.mean(vad_probs[frame_indices]))
+            else:
+                score = 0.0
+            chunk_speech_scores.append(score)
+
+        # --- ER2V2 embedding 抽出 ---
         embeddings, valid_embeddings_mask = er2v2_embed_batched(
             er2_sess,
             ecapa_model_path,
             audio_chunks,
             sr,
-            config.embedding
+            config.embedding,
         )
+
+        # --- VAD ベースで「発話を含むチャンク」に絞り込む ---
+        chunk_speech_scores = np.asarray(chunk_speech_scores, dtype=np.float32)
+        vad_th = getattr(config.embedding, "min_chunk_speech_prob", 0.30)
+        vad_mask = chunk_speech_scores >= vad_th
+
+        if len(vad_mask) != len(valid_embeddings_mask):
+            LOGGER.warning(
+                "[EMB-VAD] vad_mask len(%d) != valid_embeddings_mask len(%d). "
+                "Skipping VAD refinement.",
+                len(vad_mask),
+                len(valid_embeddings_mask),
+            )
+        else:
+            before = int(np.sum(valid_embeddings_mask))
+            valid_embeddings_mask = np.logical_and(valid_embeddings_mask, vad_mask)
+            after = int(np.sum(valid_embeddings_mask))
+            LOGGER.info(
+                "[EMB-VAD] chunks=%d, valid_before=%d, vad_speech>=%.2f -> valid_after=%d",
+                len(audio_chunks),
+                before,
+                vad_th,
+                after,
+            )
     else:
         embeddings = np.zeros((0, config.embedding.embedding_dim), dtype=np.float32)
         valid_embeddings_mask = np.zeros(0, dtype=bool)
