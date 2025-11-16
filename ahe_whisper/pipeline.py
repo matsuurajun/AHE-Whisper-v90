@@ -15,6 +15,7 @@ from ahe_whisper.vad import VAD
 from ahe_whisper.diarizer import Diarizer
 from ahe_whisper.aligner import OverlapDPAligner
 from ahe_whisper.utils import get_metrics, add_metric, calculate_coverage_metrics
+from ahe_whisper.post_diar import sanitize_speaker_timeline
 from ahe_whisper.model_manager import ensure_model_available
 
 LOGGER = logging.getLogger("ahe_whisper_worker")
@@ -347,13 +348,22 @@ def run(
         
         speaker_segments = merge_short_segments(speaker_segments, min_len=2.0)
         LOGGER.info(f"[POST-MERGE] segments after merge_short={len(speaker_segments)}")
-        
+
         # --- ALIGNMENT SANITY CHECK: ended too early? ---
         if speaker_segments and speaker_segments[-1]["end"] < duration_sec * 0.9:
             LOGGER.warning(
                 f"[ALIGNER-FIX] alignment ended early at {speaker_segments[-1]['end']:.1f}s (<90% of audio). Expanding fallback."
             )
             speaker_segments = [{"start": 0.0, "end": duration_sec, "speaker": "SPEAKER_00"}]
+
+    # --- POST-DIAR: 実効話者数の整理＆短命スピーカー吸収 ---
+    if speaker_segments:
+        speaker_segments = sanitize_speaker_timeline(
+            speaker_segments,
+            duration_sec=duration_sec,
+            config=config.diarization,
+        )
+        LOGGER.info("[POST-DIAR] final_segments=%d", len(speaker_segments))
 
     # NOTE: 方針Aではテキストは ASR の「生 words」のまま扱う
     add_metric("asr.word_count", len(words))
@@ -375,6 +385,15 @@ def run(
         else:
             speaker_segments = []
         is_fallback = True
+
+        # フォールバック後も一応 post-diar を通しておく（ほぼ no-op 想定）
+        if speaker_segments:
+            speaker_segments = sanitize_speaker_timeline(
+                speaker_segments,
+                duration_sec=duration_sec,
+                config=config.diarization,
+            )
+            LOGGER.info("[POST-DIAR] final_segments(fallback)=%d", len(speaker_segments))
 
     add_metric("pipeline.total_time_sec", time.perf_counter() - t0)
     
