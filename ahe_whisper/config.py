@@ -22,8 +22,8 @@ class EmbeddingConfig:
 
 @dataclass
 class DiarizationConfig:
-    min_speakers: int = 0
-    max_speakers: int = 8
+    min_speakers: int = 1
+    max_speakers: int = 4
     engine: str = "soft-em-adc"
     vad_th_start: float = 0.50
     vad_th_end: float = 0.20
