@@ -20,6 +20,24 @@ from ahe_whisper.model_manager import ensure_model_available
 
 LOGGER = logging.getLogger("ahe_whisper_worker")
 
+def _smooth_embeddings_over_time(embeddings: np.ndarray, kernel: int) -> np.ndarray:
+    """
+    時間方向の移動平均で埋め込みのブレを軽く平滑化する。
+    kernel は奇数推奨（例: 3,5）。
+    """
+    if embeddings.ndim != 2 or embeddings.shape[0] < 2 or kernel <= 1:
+        return embeddings
+    k = int(kernel)
+    if k < 2:
+        return embeddings
+    radius = k // 2
+    # 端は edge パディングで延長
+    padded = np.pad(embeddings, ((radius, radius), (0, 0)), mode="edge")
+    smoothed = np.empty_like(embeddings)
+    for i in range(embeddings.shape[0]):
+        smoothed[i] = padded[i : i + k].mean(axis=0)
+    return smoothed
+
 def run(
     audio_path: str,
     config: AppConfig,
@@ -196,6 +214,17 @@ def run(
             config.embedding,
         )
 
+        # --- OPTIONAL: 時間方向スムージングで「同一話者内のブレ」を抑制 ---
+        smooth_k = int(getattr(config.embedding, "smooth_embeddings_kernel", 0) or 0)
+        if smooth_k >= 3:
+            before_shape = embeddings.shape
+            embeddings = _smooth_embeddings_over_time(embeddings, smooth_k)
+            LOGGER.info(
+                "[EMB-SMOOTH] applied kernel=%d on embeddings shape=%s",
+                smooth_k,
+                before_shape,
+            )
+
         # --- VAD ベースで「発話を含むチャンク」に絞り込む ---
         chunk_speech_scores = np.asarray(chunk_speech_scores, dtype=np.float32)
         vad_th = getattr(config.embedding, "min_chunk_speech_prob", 0.30)
@@ -247,8 +276,78 @@ def run(
         diarizer = Diarizer(config.diarization)
         speaker_centroids, labels = diarizer.cluster(embeddings[valid_embeddings_mask])
         add_metric("diarizer.num_speakers_found", len(speaker_centroids))
+
+        # --- NEW: クラスタ質量とセントロイド類似度に基づくスピーカー数の縮約 ---
+        try:
+            if speaker_centroids is not None and len(speaker_centroids) > 0:
+                # ラベル頻度からクラスタ質量を計算
+                unique_labels, counts = np.unique(labels, return_counts=True)
+                total = float(np.sum(counts))
+                if total > 0.0 and len(unique_labels) > 0:
+                    masses = counts.astype(np.float32) / total
+                    min_mass = float(
+                        getattr(config.diarization, "min_cluster_mass", 0.10)
+                    )
+                    mass_keep_mask = masses >= min_mass
+                    if not np.any(mass_keep_mask):
+                        # すべて閾値未満の場合は、最大質量クラスタだけ残す
+                        mass_keep_mask[np.argmax(masses)] = True
+                    kept_labels = unique_labels[mass_keep_mask]
+
+                    # 質量フィルタ後のセントロイド集合
+                    centroids_mass_filtered = speaker_centroids[kept_labels]
+                    counts_kept = counts[mass_keep_mask]
+
+                    # 類似セントロイドのマージ（大きいクラスタ優先）
+                    order = np.argsort(counts_kept)[::-1]  # 大きい順
+                    merge_th = float(
+                        getattr(config.diarization, "centroid_merge_sim", 0.92)
+                    )
+                    final_label_indices = []
+                    for idx_local in order:
+                        lbl = int(kept_labels[idx_local])
+                        c = speaker_centroids[lbl]
+                        if not final_label_indices:
+                            final_label_indices.append(lbl)
+                            continue
+                        existing = np.stack(
+                            [speaker_centroids[j] for j in final_label_indices], axis=0
+                        )
+                        # コサイン類似度
+                        num = existing @ c
+                        denom = (
+                            np.linalg.norm(existing, axis=1)
+                            * (np.linalg.norm(c) + 1e-8)
+                            + 1e-8
+                        )
+                        sims = num / denom
+                        if float(np.max(sims)) < merge_th:
+                            final_label_indices.append(lbl)
+
+                    final_label_indices = sorted(set(final_label_indices))
+                    if len(final_label_indices) < len(speaker_centroids):
+                        LOGGER.info(
+                            "[DIAR-MERGE] clusters: original=%d, after_mass=%d, after_merge=%d",
+                            len(speaker_centroids),
+                            len(kept_labels),
+                            len(final_label_indices),
+                        )
+                    # 有効なセントロイドだけを残す
+                    speaker_centroids = speaker_centroids[final_label_indices]
+                    add_metric(
+                        "diarizer.num_speakers_effective", len(speaker_centroids)
+                    )
+        except Exception as e:
+            LOGGER.warning("[DIAR-MERGE] cluster mass/merge step failed: %s", e)
         
-        spk_probs = diarizer.get_speaker_probabilities(embeddings, valid_embeddings_mask, speaker_centroids, grid_times, hop_len, sr)
+        spk_probs = diarizer.get_speaker_probabilities(
+            embeddings,
+            valid_embeddings_mask,
+            speaker_centroids,
+            grid_times,
+            hop_len,
+            sr,
+        )
         
         # === [PATCH v90.95] 一時保存内容のログ確認と解放 ===
         try:
