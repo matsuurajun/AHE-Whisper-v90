@@ -15,7 +15,6 @@ from ahe_whisper.vad import VAD
 from ahe_whisper.diarizer import Diarizer
 from ahe_whisper.aligner import OverlapDPAligner
 from ahe_whisper.utils import get_metrics, add_metric, calculate_coverage_metrics
-from ahe_whisper.word_grouper import group_words_sudachi
 from ahe_whisper.model_manager import ensure_model_available
 
 LOGGER = logging.getLogger("ahe_whisper_worker")
@@ -179,9 +178,23 @@ def run(
     is_fallback = False
     if not np.any(valid_embeddings_mask):
         LOGGER.warning("No valid embeddings extracted. Falling back to single speaker.")
-        valid_words = [w for w in words if w.get('start') is not None and w.get('end') is not None]
-        speaker_segments = [(valid_words[0]['start'], valid_words[-1]['end'], 0)] if valid_words else []
-        is_fallback = True
+        valid_words = [
+            w for w in words
+            if w.get("start") is not None and w.get("end") is not None
+        ]
+        if valid_words:
+            speaker_segments = [
+                {
+                    "start": float(valid_words[0]["start"]),
+                    "end":   float(valid_words[-1]["end"]),
+                    "speaker": "SPEAKER_00",
+                }
+            ]
+            is_fallback = True
+        else:
+            speaker_segments = []
+            is_fallback = True
+
     else:
         diarizer = Diarizer(config.diarization)
         speaker_centroids, labels = diarizer.cluster(embeddings[valid_embeddings_mask])
@@ -242,10 +255,20 @@ def run(
         if np.any(~np.isfinite(spk_probs)):
             spk_probs = np.nan_to_num(spk_probs, nan=1.0 / spk_probs.shape[1])
         
-        LOGGER.info("[SPK-PROBS] mean_max=%.3f, mean_entropy=%.3f (tau=%.2f, scale=%.1f)",
-                    float(np.mean(np.max(spk_probs, axis=1))),
-                    float(-np.mean(np.sum(spk_probs * np.log(np.clip(spk_probs, 1e-9, 1.0)), axis=1))),
-                    tau, scale)
+        LOGGER.info(
+            "[SPK-PROBS] mean_max=%.3f, mean_entropy=%.3f (tau=%.2f, scale=%.1f)",
+            float(np.mean(np.max(spk_probs, axis=1))),
+            float(
+                -np.mean(
+                    np.sum(
+                        spk_probs * np.log(np.clip(spk_probs, 1e-9, 1.0)),
+                        axis=1,
+                    )
+                )
+            ),
+            tau,
+            scale,
+        )
         
         # --- Mini Enhancement: Stabilize speaker transition detection ---
         # 強制的に話者確率分布にスパース性を導入
@@ -332,13 +355,25 @@ def run(
             )
             speaker_segments = [{"start": 0.0, "end": duration_sec, "speaker": "SPEAKER_00"}]
 
-    words = group_words_sudachi(words)
+    # NOTE: 方針Aではテキストは ASR の「生 words」のまま扱う
     add_metric("asr.word_count", len(words))
-
+    
     if not speaker_segments and words:
         LOGGER.warning("DP alignment yielded no segments. Falling back to a single speaker segment.")
-        valid_words = [w for w in words if w.get('start') is not None and w.get('end') is not None]
-        speaker_segments = [(valid_words[0]['start'], valid_words[-1]['end'], 0)] if valid_words else []
+        valid_words = [
+            w for w in words
+            if w.get("start") is not None and w.get("end") is not None
+        ]
+        if valid_words:
+            speaker_segments = [
+                {
+                    "start": float(valid_words[0]["start"]),
+                    "end":   float(valid_words[-1]["end"]),
+                    "speaker": "SPEAKER_00",
+                }
+            ]
+        else:
+            speaker_segments = []
         is_fallback = True
 
     add_metric("pipeline.total_time_sec", time.perf_counter() - t0)
