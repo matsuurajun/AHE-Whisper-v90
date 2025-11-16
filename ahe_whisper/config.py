@@ -19,6 +19,13 @@ class EmbeddingConfig:
     inter_threads: int = 1
     embedding_win_sec: float = 1.5
     embedding_hop_sec: float = 0.75
+    # VAD の平均スコアがこの値以上のチャンクだけを
+    # 「話者クラスタリングに使う embedding」として残す
+    min_chunk_speech_prob: float = 0.30
+    # 時間方向スムージング用カーネル
+    # 0 → スムージング無効
+    # 3,5 など奇数 → 前後チャンクを含む移動平均
+    smooth_embeddings_kernel: int = 0
 
 @dataclass
 class DiarizationConfig:
@@ -32,6 +39,11 @@ class DiarizationConfig:
     min_fallback_duration_sec: float = 1.5
     min_speech_sec: float = 0.3
     max_merge_gap_sec: float = 1.5
+    # --- NEW: cluster post-processing knobs ---
+    # クラスタが担当する embedding 比率がこれ未満なら「小さすぎる」とみなして候補から外す
+    min_cluster_mass: float = 0.10
+    # セントロイド同士のコサイン類似度がこれ以上なら「同一話者」とみなしてマージ
+    centroid_merge_sim: float = 0.92
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.vad_th_start <= 1.0):
@@ -42,6 +54,10 @@ class DiarizationConfig:
             raise ValueError(f"vad_th_start ({self.vad_th_start}) must be >= vad_th_end ({self.vad_th_end}).")
         if self.min_speakers > self.max_speakers:
             raise ValueError(f"min_speakers ({self.min_speakers}) cannot be greater than max_speakers ({self.max_speakers}).")
+        if not (0.0 < self.min_cluster_mass <= 1.0):
+            raise ValueError(f"min_cluster_mass must be in (0, 1], got {self.min_cluster_mass}")
+        if not (0.0 < self.centroid_merge_sim <= 1.0):
+            raise ValueError(f"centroid_merge_sim must be in (0, 1], got {self.centroid_merge_sim}")
 
 @dataclass
 class VadConfig:
