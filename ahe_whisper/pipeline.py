@@ -98,6 +98,13 @@ def run(
     asr_model_path = ensure_model_available('asr', project_root)
     vad_model_path = ensure_model_available('vad', project_root)
     ecapa_model_path = ensure_model_available('embedding', project_root)
+
+    # --- Diarization config の実行時確認ログ ---
+    LOGGER.info(
+        "[CONFIG-DIAR] min_speakers=%d, max_speakers=%d",
+        config.diarization.min_speakers,
+        config.diarization.max_speakers,
+    )
     
     er2_sess = build_er2v2_session(ecapa_model_path, config.embedding)
     warmup_er2v2(er2_sess)
