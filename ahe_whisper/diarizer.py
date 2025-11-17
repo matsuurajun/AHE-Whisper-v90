@@ -90,12 +90,20 @@ class Diarizer:
             # min_speakers を割るようならフィルタをスキップ
             if kept >= min_speakers:
                 idx_keep = np.where(keep)[0]
-                remap_keep = {old: new for new, old in enumerate(idx_keep)}
-                labels = np.array([remap_keep[l] for l in labels], dtype=int)
+
+                # まず centroid 側だけを絞る
                 centroids = centroids[idx_keep]
-                counts = counts[idx_keep]
-                mass = mass[idx_keep]
+
+                # 削除されたクラスタに属していたフレームは、
+                # 「残ったクラスタの中で最も近い centroid」に振り直す
+                sims = embeddings @ centroids.T
+                labels = np.argmax(sims, axis=1)
+
+                # counts / mass / num_found を再計算
+                counts = np.bincount(labels, minlength=centroids.shape[0])
+                mass = counts.astype(np.float32) / float(max(1, num_frames))
                 num_found = centroids.shape[0]
+
                 LOGGER.info(
                     "[DIAR-MERGE] clusters: after_mass=%d (min_speakers=%d)",
                     num_found,
