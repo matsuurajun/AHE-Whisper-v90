@@ -67,8 +67,8 @@ class VadConfig:
 class AlignerConfig:
     # VAD / spk_probs / word_cost の重み
     alpha: float = 0.6    # VAD 重み（そのまま維持）
-    beta: float = 0.25    # 話者確率 spk_probs の重み
-    gamma: float = 1.4    # word_cost の重み
+    beta: float = 0.3    # 話者確率 spk_probs の重み
+    gamma: float = 1.0    # word_cost の重み
 
     # 話者スイッチのペナルティ
     delta_switch: float = 0.08
