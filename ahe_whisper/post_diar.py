@@ -34,7 +34,14 @@ def infer_effective_speakers(
     stats: Dict[str, Dict[str, float]],
     coverage_th: float = 0.97,
     max_speakers: int | None = None,
+    min_speakers: int = 1,
 ) -> Tuple[List[str], List[str]]:
+    """
+    duration ベースで主要話者を選ぶ。
+    - coverage_th: 累積durationがこの割合に達するまで keep に追加
+    - max_speakers: keep の上限
+    - min_speakers: coverage_th を満たしていても最低限残す話者数
+    """
     if not stats:
         return [], []
 
@@ -46,11 +53,17 @@ def infer_effective_speakers(
     for spk, rec in items:
         keep.append(spk)
         acc += rec["duration"]
-        if acc / total >= coverage_th:
+        # coverage_th を満たし、かつ min_speakers 以上確保できているときだけ break
+        if (acc / total) >= coverage_th and len(keep) >= max(1, min_speakers):
             break
 
-    if max_speakers is not None and max_speakers > 0 and len(keep) > max_speakers:
-        keep = keep[:max_speakers]
+    # max_speakers の上限を適用（ただし min_speakers は割らない）
+    if max_speakers is not None and max_speakers > 0:
+        if len(keep) > max_speakers:
+            keep = keep[:max_speakers]
+        # 念のため、安全側に揃える
+        if len(keep) < min_speakers and len(items) >= min_speakers:
+            keep = [spk for spk, _ in items[:min_speakers]]
 
     drop = [spk for spk, _ in items if spk not in keep]
     return keep, drop
@@ -172,11 +185,13 @@ def sanitize_speaker_timeline(
     merge_gap = getattr(config, "merge_gap_sec", 0.3)
     min_len = getattr(config, "min_segment_len_sec", 0.0)
     max_speakers = getattr(config, "max_speakers", None)
+    min_speakers = getattr(config, "min_speakers", 1)
 
     keep_spk, drop_spk = infer_effective_speakers(
         stats,
         coverage_th=coverage_th,
         max_speakers=max_speakers,
+        min_speakers=min_speakers,
     )
 
     LOGGER.info(
