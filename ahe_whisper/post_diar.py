@@ -45,6 +45,7 @@ def infer_effective_speakers(
     if not stats:
         return [], []
 
+    # duration 降順に並べる
     items = sorted(stats.items(), key=lambda kv: kv[1]["duration"], reverse=True)
     total = sum(v["duration"] for _, v in items) or 1.0
 
@@ -53,7 +54,7 @@ def infer_effective_speakers(
     for spk, rec in items:
         keep.append(spk)
         acc += rec["duration"]
-        # coverage_th を満たし、かつ min_speakers 以上確保できているときだけ break
+        # coverage を満たし、かつ min_speakers 以上確保できているときだけ break
         if (acc / total) >= coverage_th and len(keep) >= max(1, min_speakers):
             break
 

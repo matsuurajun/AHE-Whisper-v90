@@ -65,17 +65,23 @@ class VadConfig:
 
 @dataclass
 class AlignerConfig:
-    alpha: float = 0.6
-    beta: float = 0.25
-    gamma: float = 1.4
-    delta_switch: float = 0.15
+    # VAD / spk_probs / word_cost の重み
+    alpha: float = 0.6    # VAD 重み（そのまま維持）
+    beta: float = 0.25    # 話者確率 spk_probs の重み
+    gamma: float = 1.4    # word_cost の重み
+
+    # 話者スイッチのペナルティ
+    delta_switch: float = 0.08  # ← 0.15 から少し弱める
+
     non_speech_th: float = 0.02
     grid_hz: int = 50
 
     # --- v90.97 Smooth Aligner options ---
-    use_smooth_aligner: bool = True  # ← ON/OFF 切替用
-    smooth_alpha: float = 0.55       # EMA係数（時系列平滑）
-    smooth_gamma: float = 1.4        # ピーク強調係数
+    # diarizer 側ですでに平滑＋sharp を掛けているので、
+    # ひとまず OverlapDPAligner 側ではオフにして挙動を素直に見る。
+    use_smooth_aligner: bool = False
+    smooth_alpha: float = 0.55
+    smooth_gamma: float = 1.4
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.non_speech_th <= 1.0):
