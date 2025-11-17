@@ -127,9 +127,29 @@ def worker_process_loop(job_q: Queue, result_q: Queue, log_q: Queue, project_roo
         asr_coverage = metrics.get('asr.coverage_ratio', 0.0) * 100
         vad_speech = metrics.get('vad.speech_ratio', 0.0) * 100
 
+        # diarizer-related metrics
+        num_found = metrics.get("diarizer.num_speakers_found")
+        num_eff = metrics.get("diarizer.num_speakers_effective")
+        min_unmet = bool(metrics.get("diarizer.min_speakers_unmet", False))
+        cluster_mass = metrics.get("diarizer.cluster_mass", None)
+
         report = [f"--- Performance Report (RTF={rtf:.3f}) ---"]
         report.append(f"- ASR Coverage             : {asr_coverage:6.2f}%")
         report.append(f"- VAD Speech Ratio         : {vad_speech:6.2f}%")
+
+        if num_found is not None and num_eff is not None:
+            line = f"- Speakers (found/effective): {int(num_found):3d} / {int(num_eff):3d}"
+            if min_unmet:
+                line += "  [MIN_UNMET]"
+            report.append(line)
+
+        if cluster_mass:
+            try:
+                mass_str = ", ".join(f"{float(m):.3f}" for m in cluster_mass)
+            except Exception:
+                mass_str = str(cluster_mass)
+            report.append(f"- Cluster mass fractions   : [{mass_str}]")
+
         report.append("-" * 38)
         for name, step_time in step_times:
             report.append(f"- {name:<25}: {step_time:>7.2f}s ({(step_time / total_time * 100):.1f}%)")

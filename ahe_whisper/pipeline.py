@@ -260,6 +260,7 @@ def run(
         valid_embeddings_mask = np.zeros(0, dtype=bool)
     
     is_fallback = False
+    num_speakers_found = 0
     if not np.any(valid_embeddings_mask):
         LOGGER.warning("No valid embeddings extracted. Falling back to single speaker.")
         valid_words = [
@@ -281,72 +282,31 @@ def run(
 
     else:
         diarizer = Diarizer(config.diarization)
-        speaker_centroids, labels = diarizer.cluster(embeddings[valid_embeddings_mask])
-        add_metric("diarizer.num_speakers_found", len(speaker_centroids))
+        emb_valid = embeddings[valid_embeddings_mask]
+        speaker_centroids, labels = diarizer.cluster(emb_valid)
 
-        # --- NEW: クラスタ質量とセントロイド類似度に基づくスピーカー数の縮約 ---
-        try:
-            if speaker_centroids is not None and len(speaker_centroids) > 0:
-                # ラベル頻度からクラスタ質量を計算
-                unique_labels, counts = np.unique(labels, return_counts=True)
-                total = float(np.sum(counts))
-                if total > 0.0 and len(unique_labels) > 0:
-                    masses = counts.astype(np.float32) / total
-                    min_mass = float(
-                        getattr(config.diarization, "min_cluster_mass", 0.10)
-                    )
-                    mass_keep_mask = masses >= min_mass
-                    if not np.any(mass_keep_mask):
-                        # すべて閾値未満の場合は、最大質量クラスタだけ残す
-                        mass_keep_mask[np.argmax(masses)] = True
-                    kept_labels = unique_labels[mass_keep_mask]
+        # === DIAR stats: frame-level cluster mass & found speakers ===
+        if labels.size == 0:
+            num_speakers_found = 0
+            cluster_mass: list = []
+        else:
+            unique_labels, counts = np.unique(labels, return_counts=True)
+            num_speakers_found = int(unique_labels.size)
+            total_frames = int(counts.sum())
+            cluster_mass = (
+                counts.astype(np.float32) / float(max(1, total_frames))
+            ).tolist()
 
-                    # 質量フィルタ後のセントロイド集合
-                    centroids_mass_filtered = speaker_centroids[kept_labels]
-                    counts_kept = counts[mass_keep_mask]
+        add_metric("diarizer.num_speakers_found", num_speakers_found)
+        add_metric("diarizer.cluster_mass", cluster_mass)
+        add_metric("diarizer.cluster_count", num_speakers_found)
 
-                    # 類似セントロイドのマージ（大きいクラスタ優先）
-                    order = np.argsort(counts_kept)[::-1]  # 大きい順
-                    merge_th = float(
-                        getattr(config.diarization, "centroid_merge_sim", 0.92)
-                    )
-                    final_label_indices = []
-                    for idx_local in order:
-                        lbl = int(kept_labels[idx_local])
-                        c = speaker_centroids[lbl]
-                        if not final_label_indices:
-                            final_label_indices.append(lbl)
-                            continue
-                        existing = np.stack(
-                            [speaker_centroids[j] for j in final_label_indices], axis=0
-                        )
-                        # コサイン類似度
-                        num = existing @ c
-                        denom = (
-                            np.linalg.norm(existing, axis=1)
-                            * (np.linalg.norm(c) + 1e-8)
-                            + 1e-8
-                        )
-                        sims = num / denom
-                        if float(np.max(sims)) < merge_th:
-                            final_label_indices.append(lbl)
+        LOGGER.info(
+            "[DIAR-STATS] frame_clusters=%d, mass=%s",
+            num_speakers_found,
+            ", ".join(f"{m:.3f}" for m in cluster_mass) if cluster_mass else "[]",
+        )
 
-                    final_label_indices = sorted(set(final_label_indices))
-                    if len(final_label_indices) < len(speaker_centroids):
-                        LOGGER.info(
-                            "[DIAR-MERGE] clusters: original=%d, after_mass=%d, after_merge=%d",
-                            len(speaker_centroids),
-                            len(kept_labels),
-                            len(final_label_indices),
-                        )
-                    # 有効なセントロイドだけを残す
-                    speaker_centroids = speaker_centroids[final_label_indices]
-                    add_metric(
-                        "diarizer.num_speakers_effective", len(speaker_centroids)
-                    )
-        except Exception as e:
-            LOGGER.warning("[DIAR-MERGE] cluster mass/merge step failed: %s", e)
-        
         spk_probs = diarizer.get_speaker_probabilities(
             embeddings,
             valid_embeddings_mask,
@@ -517,6 +477,37 @@ def run(
             config=config.diarization,
         )
         LOGGER.info("[POST-DIAR] final_segments=%d", len(speaker_segments))
+
+    # === DIAR stats: effective speakers from final timeline ===
+    if speaker_segments:
+        final_speakers = {seg.get("speaker", "SPEAKER_00") for seg in speaker_segments}
+        num_speakers_effective = len(final_speakers)
+    else:
+        num_speakers_effective = 0
+
+    add_metric("diarizer.num_speakers_effective", int(num_speakers_effective))
+
+    min_speakers_cfg = int(getattr(config.diarization, "min_speakers", 1))
+    min_unmet = bool(
+        num_speakers_found >= min_speakers_cfg
+        and num_speakers_effective < min_speakers_cfg
+    )
+    add_metric("diarizer.min_speakers_unmet", min_unmet)
+
+    if min_unmet:
+        LOGGER.warning(
+            "[DIAR] min_speakers_unmet: min=%d, found=%d, effective=%d",
+            min_speakers_cfg,
+            num_speakers_found,
+            num_speakers_effective,
+        )
+    else:
+        LOGGER.info(
+            "[DIAR] speakers: min=%d, found=%d, effective=%d",
+            min_speakers_cfg,
+            num_speakers_found,
+            num_speakers_effective,
+        )
 
     # NOTE: 方針Aではテキストは ASR の「生 words」のまま扱う
     add_metric("asr.word_count", len(words))
