@@ -43,7 +43,7 @@ class DiarizationConfig:
     # クラスタが担当する embedding 比率がこれ未満なら「小さすぎる」とみなして候補から外す
     min_cluster_mass: float = 0.05
     # セントロイド同士のコサイン類似度がこれ以上なら「同一話者」とみなしてマージ
-    centroid_merge_sim: float = 0.88
+    centroid_merge_sim: float = 0.90
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.vad_th_start <= 1.0):

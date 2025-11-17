@@ -15,6 +15,161 @@ class Diarizer:
     def __init__(self, config: DiarizationConfig) -> None:
         self.config = config
 
+    def _postprocess_clusters(
+        self,
+        embeddings: np.ndarray,
+        centroids: np.ndarray,
+        labels: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        KMeans+EM の結果（centroids, labels）に対して、
+        - 空クラスタの除去
+        - cluster_mass によるフィルタ
+        - centroid 類似度によるマージ
+        を行う。
+
+        その際、min_speakers を「最終クラスタ数のソフト下限」として尊重し、
+        min_speakers を下回るようなフィルタ / マージは行わない。
+        """
+        if embeddings.shape[0] == 0 or centroids.shape[0] == 0:
+            return centroids, labels
+
+        num_frames = embeddings.shape[0]
+        k = centroids.shape[0]
+
+        # --- empty cluster を除去 ---
+        counts = np.bincount(labels, minlength=k)
+        nonempty = counts > 0
+        if not np.any(nonempty):
+            # 念のためのフォールバック：全部空ならそのまま返す
+            LOGGER.warning("[DIAR-MERGE] all clusters empty in postprocess; returning raw centroids.")
+            return centroids, labels
+
+        idx_nonempty = np.where(nonempty)[0]
+        if len(idx_nonempty) < k:
+            LOGGER.info(
+                "[DIAR-MERGE] dropping %d empty clusters (original=%d, nonempty=%d)",
+                k - len(idx_nonempty),
+                k,
+                len(idx_nonempty),
+            )
+
+        # 再マッピング
+        remap_nonempty = {old: new for new, old in enumerate(idx_nonempty)}
+        labels = np.array([remap_nonempty[l] for l in labels], dtype=int)
+        centroids = centroids[idx_nonempty]
+        counts = counts[idx_nonempty]
+
+        num_found = centroids.shape[0]
+        min_speakers = max(1, int(getattr(self.config, "min_speakers", 1)))
+        max_speakers = max(min_speakers, int(getattr(self.config, "max_speakers", num_found)))
+
+        # --- cluster mass の計算 ---
+        mass = counts.astype(np.float32) / float(max(1, num_frames))
+
+        min_cluster_mass = float(getattr(self.config, "min_cluster_mass", 0.0))
+        centroid_merge_sim = float(getattr(self.config, "centroid_merge_sim", 0.0))
+
+        LOGGER.info(
+            "[DIAR-MERGE] clusters: original=%d, min_speakers=%d, max_speakers=%d",
+            num_found,
+            min_speakers,
+            max_speakers,
+        )
+
+        # --- 質量しきい値でクラスタ削除（ただし min_speakers を下回らない範囲） ---
+        if min_cluster_mass > 0.0 and num_found > min_speakers:
+            keep = mass >= min_cluster_mass
+            kept = int(keep.sum())
+            LOGGER.info(
+                "[DIAR-MERGE] mass filter: threshold=%.3f -> kept=%d",
+                min_cluster_mass,
+                kept,
+            )
+
+            # min_speakers を割るようならフィルタをスキップ
+            if kept >= min_speakers:
+                idx_keep = np.where(keep)[0]
+                remap_keep = {old: new for new, old in enumerate(idx_keep)}
+                labels = np.array([remap_keep[l] for l in labels], dtype=int)
+                centroids = centroids[idx_keep]
+                counts = counts[idx_keep]
+                mass = mass[idx_keep]
+                num_found = centroids.shape[0]
+                LOGGER.info(
+                    "[DIAR-MERGE] clusters: after_mass=%d (min_speakers=%d)",
+                    num_found,
+                    min_speakers,
+                )
+            else:
+                LOGGER.info(
+                    "[DIAR-MERGE] skipping mass filter because kept=%d < min_speakers=%d",
+                    kept,
+                    min_speakers,
+                )
+
+        # --- centroid 類似度でマージ（min_speakers を割らない範囲で） ---
+        if centroid_merge_sim > 0.0 and num_found > min_speakers:
+            while True:
+                sims = centroids @ centroids.T  # L2 正規化済み前提
+                np.fill_diagonal(sims, -1.0)
+                flat_idx = int(np.argmax(sims))
+                i, j = divmod(flat_idx, sims.shape[1])
+                max_sim = float(sims[i, j])
+
+                if max_sim < centroid_merge_sim or centroids.shape[0] <= min_speakers:
+                    break
+
+                LOGGER.info(
+                    "[DIAR-MERGE] merging clusters (%d, %d) with sim=%.3f (threshold=%.2f)",
+                    i,
+                    j,
+                    max_sim,
+                    centroid_merge_sim,
+                )
+
+                # j を i にマージ（counts で重み付け平均）
+                total = counts[i] + counts[j]
+                if total > 0:
+                    merged = (centroids[i] * counts[i] + centroids[j] * counts[j]) / float(total)
+                else:
+                    merged = 0.5 * (centroids[i] + centroids[j])
+                merged = safe_l2_normalize(merged.reshape(1, -1))[0]
+
+                # centroids / counts を更新（j を削除）
+                mask = np.ones(centroids.shape[0], dtype=bool)
+                mask[j] = False
+                centroids[i] = merged
+                centroids = centroids[mask]
+                counts[i] = total
+                counts = counts[mask]
+
+                # ラベルも再マッピング
+                remap = {}
+                new_idx = 0
+                for old_idx in range(mask.shape[0]):
+                    if mask[old_idx]:
+                        remap[old_idx] = new_idx
+                        new_idx += 1
+                # マージされた j は i に吸収
+                remap[j] = remap[i]
+                labels = np.array([remap[l] for l in labels], dtype=int)
+
+            LOGGER.info(
+                "[DIAR-MERGE] clusters: after_merge=%d (min_speakers=%d)",
+                centroids.shape[0],
+                min_speakers,
+            )
+
+        # --- 最終セーフガード ---
+        if centroids.shape[0] == 0:
+            LOGGER.warning("[DIAR-MERGE] all clusters removed; falling back to single centroid.")
+            mean_centroid = np.mean(embeddings, axis=0, keepdims=True)
+            centroids = safe_l2_normalize(mean_centroid)
+            labels = np.zeros(num_frames, dtype=int)
+
+        return centroids, labels
+
     def cluster(self, embeddings: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         # [PATCH v90.90] CRITICAL ATTRIBUTE/INDEX ERROR FIX:
         # Safely handle empty embeddings array without referencing self.config.
@@ -56,6 +211,11 @@ class Diarizer:
             attractors = new_attractors
         
         final_labels = np.argmax(responsibilities, axis=1)
+
+        # --- [NEW] クラスタ後処理（mass filter / merge / min_speakers ソフト下限） ---
+        attractors, final_labels = self._postprocess_clusters(
+            embeddings, attractors, final_labels
+        )
         return attractors, final_labels
 
     def get_speaker_probabilities(
