@@ -6,12 +6,12 @@ from typing import Dict, Any
 MODELS: Dict[str, Dict[str, Any]] = {
     "embedding": {
         "repo_id": "Wespeaker/speaker-embedding-models",
-        #"revision": "90233509ddc5368a88f53c9e3650646c0f065355",
+        # Cam++ (Context-Aware Masking TDNN) - Winner of the benchmark
         "required_files": [
-            "3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx",
+            "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
             "config.yaml"
         ],
-        "primary_file": "3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx"
+        "primary_file": "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
     },
     "vad": {
         "repo_id": "onnx-community/silero-vad",
