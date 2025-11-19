@@ -61,7 +61,7 @@ class DiarizationConfig:
 
 @dataclass
 class VadConfig:
-    window_size_samples: int = 320
+    window_size_samples: int = 512
 
 @dataclass
 class AlignerConfig:
