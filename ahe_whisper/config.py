@@ -32,8 +32,8 @@ class DiarizationConfig:
     min_speakers: int = 2
     max_speakers: int = 4
     engine: str = "soft-em-adc"
-    vad_th_start: float = 0.50
-    vad_th_end: float = 0.30
+    vad_th_start: float = 0.3
+    vad_th_end: float = 0.1
     em_tau_schedule: List[float] = field(default_factory=lambda: [10.0, 5.0, 3.0])
     min_speaker_duration_sec: float = 1.2
     min_fallback_duration_sec: float = 1.0
@@ -70,7 +70,7 @@ class AlignerConfig:
     beta: float = 0.3    # 話者確率 spk_probs の重み
     gamma: float = 1.3    # word_cost の重み
 
-    delta_switch: float = 0.05
+    delta_switch: float = 0.01
     non_speech_th: float = 0.02
     grid_hz: int = 50
 
