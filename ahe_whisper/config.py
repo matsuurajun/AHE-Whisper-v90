@@ -70,7 +70,7 @@ class AlignerConfig:
     beta: float = 0.3    # 話者確率 spk_probs の重み
     gamma: float = 1.3    # word_cost の重み
 
-    delta_switch: float = 0.01
+    delta_switch: float = 0.0
     non_speech_th: float = 0.02
     grid_hz: int = 50
 
