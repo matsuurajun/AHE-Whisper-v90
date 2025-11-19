@@ -53,11 +53,26 @@ class VAD:
     def get_speech_probabilities(self, waveform: np.ndarray, sr: int, grid_hz: int):
         window_size = self.config.window_size_samples
         
+        # --- 【追加修正】 VAD感度向上のためのピーク正規化 ---
+        # 波形の最大振幅を取得
+        max_val = np.max(np.abs(waveform))
+        if max_val > 0:
+            # 最大値が1.0になるように全体をスケールアップ（音量を上げる）
+            # 感度不足の根本原因である「入力レベルの低さ」を解消します
+            scale_factor = 1.0 / (max_val + 1e-8)
+            # 元のwaveformを書き換えないようコピーして使用
+            waveform_norm = waveform * scale_factor
+            print(f"[DEBUG-VAD] Applied peak normalization: scale_factor={scale_factor:.2f}")
+        else:
+            waveform_norm = waveform
+        # ------------------------------------------------
+
         probs = []
         self.reset_states()
         
-        for i in range(0, len(waveform), window_size):
-            chunk = waveform[i: i + window_size]
+        # waveform ではなく waveform_norm を使用するように変更
+        for i in range(0, len(waveform_norm), window_size):
+            chunk = waveform_norm[i: i + window_size]  # ←ここを変更
             if len(chunk) < window_size:
                 chunk = np.pad(chunk, (0, window_size - len(chunk)))
             prob = self(chunk.reshape(1, -1), sr)
