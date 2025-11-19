@@ -5,11 +5,12 @@ from typing import Dict, Any
 
 MODELS: Dict[str, Dict[str, Any]] = {
     "embedding": {
-        "repo_id": "Wespeaker/speaker-embedding-models",
+        # 修正: 正しいリポジトリIDに変更 (Wespeaker/speaker-embedding-models -> csukuangfj/speaker-embedding-models)
+        "repo_id": "csukuangfj/speaker-embedding-models",
         # Cam++ (Context-Aware Masking TDNN) - Winner of the benchmark
         "required_files": [
-            "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
-            "config.yaml"
+            "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
+            # 修正: config.yaml はこのリポジトリに存在しないため削除 (デフォルト設定が使用されます)
         ],
         "primary_file": "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
     },
