@@ -441,7 +441,7 @@ def run(
             
             return merged
         
-        speaker_segments = merge_short_segments(speaker_segments, min_len=2.0)
+        speaker_segments = merge_short_segments(speaker_segments, min_len=0.0)
         LOGGER.info(f"[POST-MERGE] segments after merge_short={len(speaker_segments)}")
 
         # --- ALIGNMENT SANITY CHECK: ended too early? ---
