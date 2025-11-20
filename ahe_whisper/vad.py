@@ -23,19 +23,24 @@ class VAD:
 
     def reset_states(self) -> None:
         # モデルの仕様に合わせて内部状態(h, c または state)を初期化
-        # Silero VAD v4/v5 の一般的なシェイプに対応
-        state_shape = [2, 1, 128] # デフォルト
-        
         try:
             if self.uses_combined_state:
                 # v5 style: 'state' (2, 1, 128)
-                # 実際のモデル入力形状を確認して合わせる（簡易実装）
+                # ★【修正】バッチサイズ(dim 1)は必ず1にする
+                # モデルから取得したshape情報の2番目が動的(str)の場合でも1に固定
                 state_input = next((i for i in self.session.get_inputs() if i.name == 'state'), None)
                 if state_input and len(state_input.shape) == 3:
-                     # shapeに動的な次元(文字など)が含まれる場合の対策
-                     shape = [d if isinstance(d, int) else 128 for d in state_input.shape]
+                     shape = list(state_input.shape)
+                     # shape[0] (layer数) が整数の場合はそのまま、そうでなければ2
+                     shape[0] = shape[0] if isinstance(shape[0], int) else 2
+                     # shape[1] (バッチサイズ) は必ず 1 に固定
+                     shape[1] = 1
+                     # shape[2] (hidden_size) が整数の場合はそのまま、そうでなければ128
+                     shape[2] = shape[2] if isinstance(shape[2], int) else 128
+                     
                      self._state = np.zeros(shape, dtype=np.float32)
                 else:
+                     # フォールバック（標準的なSilero V5の形状）
                      self._state = np.zeros((2, 1, 128), dtype=np.float32)
             else:
                 # v4 style: 'h', 'c'
@@ -43,6 +48,7 @@ class VAD:
                 self._c = np.zeros((2, 1, 64), dtype=np.float32)
         except Exception as e:
             LOGGER.warning(f"State initialization fallback used: {e}")
+            # 安全策として最も一般的な形状で初期化
             self._state = np.zeros((2, 1, 128), dtype=np.float32)
             self._h = np.zeros((2, 1, 64), dtype=np.float32)
             self._c = np.zeros((2, 1, 64), dtype=np.float32)
@@ -69,7 +75,7 @@ class VAD:
             
         return out[0][0]
 
-    # --- 【追加】 確率列を整形するメソッド ---
+    # --- 確率列を整形するメソッド（提言の実装） ---
     def refine_probs(self, probs: np.ndarray, kernel: int = 7, sharpness: float = 5.0) -> np.ndarray:
         """
         1. 移動平均でフレーム毎のバラつき（チャタリング）を抑制
@@ -90,14 +96,12 @@ class VAD:
         
         return p_sharp
 
-    # --- 【修正】 メイン処理メソッド ---
-    def get_speech_probabilities(self, waveform: np.ndarray, sr: int, grid_hz: int) -> Tuple[np.ndarray, np.ndarray]:
+    def get_speech_probabilities(self, waveform: np.ndarray, sr: int, grid_hz: int):
         window_size = getattr(self.config, "window_size_samples", 512)
         
         # --- 1. ロバスト正規化（入力レベルの最適化） ---
-        # 音量が小さい場合でも、突発ノイズを無視して音声レベルを適正範囲（-1.0 ~ 1.0）に引き上げます
         if len(waveform) > 0:
-            # 99.5%点の音量を基準にする（最大値だとクリックノイズ等に引っ張られるため）
+            # 99.5%点の音量を基準にする（突発ノイズ無視）
             robust_max = np.percentile(np.abs(waveform), 99.5)
             if robust_max > 0:
                 # 0.9はクリッピング防止のマージン
@@ -113,7 +117,6 @@ class VAD:
         self.reset_states()
         
         # --- 2. 推論実行 ---
-        # 正規化された waveform_norm を使用します
         for i in range(0, len(waveform_norm), window_size):
             chunk = waveform_norm[i: i + window_size]
             if len(chunk) < window_size:
@@ -126,31 +129,27 @@ class VAD:
         probs = np.array(probs, dtype=np.float32)
         
         # --- 3. 確率列の整形（平滑化＋強調） ---
-        # これにより、曖昧な確率（0.4〜0.6）が減り、閾値判定が安定します
         # 提言の推奨値: kernel=7, sharpness=5.0
         probs_refined = self.refine_probs(probs, kernel=7, sharpness=5.0)
         
-        # デバッグログ：効果の確認用
         if len(probs) > 0:
             LOGGER.info(f"[DEBUG-VAD] Probs stats (raw)   : mean={probs.mean():.3f}, std={probs.std():.3f}")
             LOGGER.info(f"[DEBUG-VAD] Probs stats (refined): mean={probs_refined.mean():.3f}, std={probs_refined.std():.3f}")
 
-        # --- 4. 時間軸の生成 ---
+        # 時間軸の生成
         total_sec = len(waveform) / sr
         if total_sec <= 0:
              return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
              
         num_grid_points = int(total_sec * grid_hz)
-        # グリッドポイントが生成できないほど短い場合のガード
         if num_grid_points <= 0:
              grid_times = np.array([0.0], dtype=np.float32)
-             # probs_refined が空でなければ1点だけ返す等の処理
              interp_probs = np.array([probs_refined[0]] if len(probs_refined)>0 else [0.0], dtype=np.float32)
              return interp_probs, grid_times
 
         grid_times = np.linspace(0.0, total_sec, num_grid_points, endpoint=False, dtype=np.float32)
 
-        # 元の確率列(frame単位)を grid_hz (50Hzなど) にリサンプリング
+        # リサンプリング
         frame_times = np.arange(len(probs_refined), dtype=np.float32) * (window_size / sr)
 
         if frame_times.size < 2:
