@@ -279,10 +279,15 @@ class Diarizer:
                 spk_probs[:, :] = valid_similarities[0, :]
             return safe_softmax(spk_probs)
         
-        # === [PATCH v90.91-CONTRAST] Apply contrast normalization before interpolation ===
-        var = np.std(valid_similarities)
+        # === [PATCH v91-CONTRAST] Apply contrast normalization before interpolation ===
+        # 行方向（1フレーム内での話者差）の std を平均して「コントラストの低さ」を判定する
+        row_std = np.std(valid_similarities, axis=1)
+        var = float(np.mean(row_std))
         if var < 0.05:
-            print(f"[DEBUG-DIAR] low variance (std={var:.4f}) → applying contrast normalization (pre-interp)")
+            print(
+                "[DEBUG-DIAR] low per-frame variance "
+                f"(mean row-std={var:.4f}) → applying contrast normalization (pre-interp)"
+            )
             # Z-score normalization per frame
             valid_similarities = (valid_similarities - np.mean(valid_similarities, axis=1, keepdims=True)) / \
                                  (np.std(valid_similarities, axis=1, keepdims=True) + 1e-6)
@@ -295,9 +300,12 @@ class Diarizer:
         T, K = valid_similarities.shape
 
         # 低コントラストなら事前正規化 + tanh(×3)
-        global_std = float(np.std(valid_similarities))
+        global_std = float(np.mean(np.std(valid_similarities, axis=1)))
         if global_std < 0.05:
-            LOGGER.info("[DEBUG-DIAR] low variance (std=%.4f) → z-score + tanh*3", global_std)
+            LOGGER.info(
+                "[DEBUG-DIAR] low variance (mean row-std=%.4f) → z-score + tanh*3",
+                global_std,
+            )
             valid_similarities = (valid_similarities - np.mean(valid_similarities, axis=1, keepdims=True)) / \
                                  (np.std(valid_similarities, axis=1, keepdims=True) + 1e-6)
             valid_similarities = np.tanh(valid_similarities * 3.0)
@@ -366,11 +374,64 @@ class Diarizer:
         spk_probs = np.clip(spk_probs, 1e-9, 1.0)
         spk_probs /= np.sum(spk_probs, axis=1, keepdims=True)
 
-        # --- diagnostics ---
+        # --- diagnostics & degeneracy check ---
         self.last_valid_sims = valid_similarities.copy()
+
         mm = float(np.mean(np.max(spk_probs, axis=1)))
         ent = float(-np.mean(np.sum(spk_probs * np.log(spk_probs + 1e-12), axis=1)))
-        LOGGER.info("[SPK-PROBS] final: mean_max=%.3f, mean_entropy=%.3f, shape=%s",
-                    mm, ent, str(spk_probs.shape))
+        LOGGER.info(
+            "[SPK-PROBS] final(pre-check): mean_max=%.3f, mean_entropy=%.3f, shape=%s",
+            mm,
+            ent,
+            str(spk_probs.shape),
+        )
+
+        # === [PATCH v91-FAILSAFE] almost-uniform な分布のときは「ハードクラスタ」にフォールバック ===
+        min_mean_max = float(getattr(self.config, "min_probs_mean_max", 0.55))
+        max_mean_entropy = float(getattr(self.config, "max_probs_mean_entropy", 0.67))
+
+        if K >= 2 and (mm < min_mean_max or ent > max_mean_entropy):
+            LOGGER.warning(
+                "[SPK-PROBS] degenerate distribution detected "
+                "(mean_max=%.3f, entropy=%.3f, K=%d). "
+                "Falling back to hard cluster-based probabilities.",
+                mm,
+                ent,
+                K,
+            )
+
+            # valid_similarities 上で argmax を取り、ほぼ one-hot な分布を生成
+            hard_labels = np.argmax(valid_similarities, axis=1)  # (T,)
+            T_valid = valid_similarities.shape[0]
+            eps = 0.02
+            spk_valid_hard = np.full((T_valid, K), eps / K, dtype=np.float32)
+            spk_valid_hard[np.arange(T_valid), hard_labels] = 1.0 - eps + eps / K
+
+            # grid_times へ再補間
+            spk_probs = np.zeros((len(grid_times), K), dtype=np.float32)
+            for k in range(K):
+                fn = interp1d(
+                    valid_times,
+                    spk_valid_hard[:, k],
+                    kind="linear",
+                    bounds_error=False,
+                    fill_value="extrapolate",
+                )
+                spk_probs[:, k] = fn(grid_times)
+
+            spk_probs = np.clip(spk_probs, 1e-9, 1.0)
+            spk_probs /= np.sum(spk_probs, axis=1, keepdims=True)
+
+            mm = float(np.mean(np.max(spk_probs, axis=1)))
+            ent = float(-np.mean(np.sum(spk_probs * np.log(spk_probs + 1e-12), axis=1)))
+            LOGGER.info(
+                "[SPK-PROBS] fallback(hard-cluster): mean_max=%.3f, mean_entropy=%.3f, shape=%s",
+                mm,
+                ent,
+                str(spk_probs.shape),
+            )
+
+        # --- 外部診断用に保存（pipeline などから覗けるように） ---
+        self.last_probs = spk_probs.copy()
 
         return spk_probs

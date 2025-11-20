@@ -315,74 +315,27 @@ def run(
             hop_len,
             sr,
         )
-        
-        # === [PATCH v90.95] 一時保存内容のログ確認と解放 ===
-        try:
-            if hasattr(diarizer, "last_probs"):
-                LOGGER.info("[DEBUG-DIAR] last_probs available: shape=%s, mean_max=%.3f, entropy=%.3f",
-                            str(diarizer.last_probs.shape),
-                            float(np.mean(np.max(diarizer.last_probs, axis=1))),
-                            float(-np.mean(np.sum(
-                                diarizer.last_probs * np.log(np.clip(diarizer.last_probs, 1e-9, 1.0)), axis=1))))
-                # --- release memory early (analysis aid) ---
-                del diarizer.last_probs
-                LOGGER.debug("[DEBUG-DIAR] last_probs deleted to reduce memory footprint")
-        except Exception as e:
-            LOGGER.warning(f"[DEBUG-DIAR] could not inspect/delete last_probs: {e}")
-        
-        # === Diagnostic and normalization enhancement ===
-        LOGGER.info("[DEBUG-DIAR] valid_sims diagnostics before normalization")
-        try:
-            if hasattr(diarizer, "last_valid_sims"):
-                sims = diarizer.last_valid_sims
-                LOGGER.info("[DEBUG-DIAR] valid_sims stats: min=%.4f, max=%.4f, mean=%.4f, std=%.4f",
-                            float(np.min(sims)), float(np.max(sims)),
-                            float(np.mean(sims)), float(np.std(sims)))
-                if float(np.std(sims)) < 0.05:
-                    LOGGER.warning("[DEBUG-DIAR] valid_sims has very low variance (%.4f). Applying contrast normalization.", float(np.std(sims)))
-                    sims = (sims - np.mean(sims, axis=1, keepdims=True)) / (np.std(sims, axis=1, keepdims=True) + 1e-6)
-                    sims = np.tanh(sims)
-                    diarizer.last_valid_sims = sims  # overwrite for consistency
-        except Exception as e:
-            LOGGER.warning("[DEBUG-DIAR] could not inspect valid_sims: %s", str(e))
 
-        # --- Improved normalization with contrast scaling + temperature ---
-        tau = 1.0
-        scale = 3.0  # <= 新規追加：分散を増幅
-        
-        # --- sanity log ---
-        LOGGER.info("[SPK-PROBS-RAW] shape=%s, min=%.4f, max=%.4f, mean=%.4f, std=%.4f",
-                    str(spk_probs.shape), float(np.min(spk_probs)), float(np.max(spk_probs)), 
-                    float(np.mean(spk_probs)), float(np.std(spk_probs)))
-        
-        spk_probs = (spk_probs + 1.0) / 2.0
-        spk_probs = np.clip(spk_probs, 0.0, 1.0)
-        
-        # コントラスト強調
-        #spk_probs = (spk_probs - 0.5) * scale + 0.5
-        #spk_probs = np.clip(spk_probs, 0.0, 1.0)
-        
-        max_per_row = np.max(spk_probs, axis=1, keepdims=True)
-        spk_probs = np.exp((spk_probs - max_per_row) / tau)
-        spk_probs = spk_probs / np.sum(spk_probs, axis=1, keepdims=True)
-        
-        if np.any(~np.isfinite(spk_probs)):
-            spk_probs = np.nan_to_num(spk_probs, nan=1.0 / spk_probs.shape[1])
-        
-        LOGGER.info(
-            "[SPK-PROBS] mean_max=%.3f, mean_entropy=%.3f (tau=%.2f, scale=%.1f)",
-            float(np.mean(np.max(spk_probs, axis=1))),
-            float(
+        # === [DIAG v91] speaker-probability health check (normalizationは diarizer 側で完結) ===
+        try:
+            max_per_row = np.max(spk_probs, axis=1)
+            mm = float(np.mean(max_per_row))
+            ent = float(
                 -np.mean(
                     np.sum(
                         spk_probs * np.log(np.clip(spk_probs, 1e-9, 1.0)),
                         axis=1,
                     )
                 )
-            ),
-            tau,
-            scale,
-        )
+            )
+            LOGGER.info(
+                "[SPK-PROBS] from diarizer: mean_max=%.3f, mean_entropy=%.3f, shape=%s",
+                mm,
+                ent,
+                str(spk_probs.shape),
+            )
+        except Exception as e:
+            LOGGER.warning(f"[SPK-PROBS] diagnostic failed: {e}")
                
         aligner = OverlapDPAligner(config.aligner)
         
