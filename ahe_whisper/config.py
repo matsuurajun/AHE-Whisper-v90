@@ -32,8 +32,8 @@ class DiarizationConfig:
     min_speakers: int = 2
     max_speakers: int = 4
     engine: str = "soft-em-adc"
-    vad_th_start: float = 0.3
-    vad_th_end: float = 0.1
+    vad_th_start: float = 0.6
+    vad_th_end: float = 0.4
     em_tau_schedule: List[float] = field(default_factory=lambda: [10.0, 5.0, 3.0])
     min_speaker_duration_sec: float = 1.2
     min_fallback_duration_sec: float = 1.0
