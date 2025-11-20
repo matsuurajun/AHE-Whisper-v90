@@ -12,7 +12,7 @@ class TranscriptionConfig:
 @dataclass
 class EmbeddingConfig:
     embedding_dim: int = 192
-    batch_cap: int = 4
+    batch_cap: int = 16
     bucket_step: int = 80
     prefer_coreml_ep: bool = False
     intra_threads: Optional[int] = None
@@ -25,7 +25,7 @@ class EmbeddingConfig:
     # 時間方向スムージング用カーネル
     # 0 → スムージング無効
     # 3,5 など奇数 → 前後チャンクを含む移動平均
-    smooth_embeddings_kernel: int = 0
+    smooth_embeddings_kernel: int = 5
 
 @dataclass
 class DiarizationConfig:
@@ -67,8 +67,8 @@ class VadConfig:
 class AlignerConfig:
     # VAD / spk_probs / word_cost の重み
     alpha: float = 0.6    # VAD 重み（そのまま維持）
-    beta: float = 0.3    # 話者確率 spk_probs の重み
-    gamma: float = 1.3    # word_cost の重み
+    beta: float = 0.5    # 話者確率 spk_probs の重み
+    gamma: float = 1.0    # word_cost の重み
 
     delta_switch: float = 0.0
     non_speech_th: float = 0.02
