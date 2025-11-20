@@ -21,11 +21,11 @@ class EmbeddingConfig:
     embedding_hop_sec: float = 0.75
     # VAD の平均スコアがこの値以上のチャンクだけを
     # 「話者クラスタリングに使う embedding」として残す
-    min_chunk_speech_prob: float = 0.30
+    min_chunk_speech_prob: float = 0.5
     # 時間方向スムージング用カーネル
     # 0 → スムージング無効
     # 3,5 など奇数 → 前後チャンクを含む移動平均
-    smooth_embeddings_kernel: int = 5
+    smooth_embeddings_kernel: int = 3
 
 @dataclass
 class DiarizationConfig:
