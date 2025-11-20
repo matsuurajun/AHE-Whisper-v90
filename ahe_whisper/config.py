@@ -21,7 +21,7 @@ class EmbeddingConfig:
     embedding_hop_sec: float = 0.75
     # VAD の平均スコアがこの値以上のチャンクだけを
     # 「話者クラスタリングに使う embedding」として残す
-    min_chunk_speech_prob: float = 0.5
+    min_chunk_speech_prob: float = 0.4
     # 時間方向スムージング用カーネル
     # 0 → スムージング無効
     # 3,5 など奇数 → 前後チャンクを含む移動平均
@@ -32,8 +32,8 @@ class DiarizationConfig:
     min_speakers: int = 2
     max_speakers: int = 4
     engine: str = "soft-em-adc"
-    vad_th_start: float = 0.6
-    vad_th_end: float = 0.4
+    vad_th_start: float = 0.5
+    vad_th_end: float = 0.3
     em_tau_schedule: List[float] = field(default_factory=lambda: [10.0, 5.0, 3.0])
     min_speaker_duration_sec: float = 1.2
     min_fallback_duration_sec: float = 1.0
