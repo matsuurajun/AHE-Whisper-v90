@@ -156,6 +156,24 @@ def get_default_config(state: AppState) -> None:
                 ui.number('Max Speakers', value=cfg.diarization.max_speakers, min=1, format='%.0f').bind_value(cfg.diarization, 'max_speakers')
                 ui.number('VAD Start Threshold', value=cfg.diarization.vad_th_start, min=0.0, max=1.0, step=0.05, format='%.2f').bind_value(cfg.diarization, 'vad_th_start')
                 ui.number('VAD End Threshold', value=cfg.diarization.vad_th_end, min=0.0, max=1.0, step=0.05, format='%.2f').bind_value(cfg.diarization, 'vad_th_end')
+                
+                ui.separator().classes('my-4')
+                ui.label('Aligner (Speaker Switch)').classes('text-lg font-semibold')
+                
+                # 声の重要度 (beta)
+                ui.number('Voice Weight (Beta)', value=cfg.aligner.beta, min=0.0, max=2.0, step=0.1, format='%.1f') \
+                    .bind_value(cfg.aligner, 'beta') \
+                    .tooltip('Higher = Trust voice vectors more (0.8 recommended)')
+                
+                # 文字のつながり重要度 (gamma)
+                ui.number('Text Continuity (Gamma)', value=cfg.aligner.gamma, min=0.0, max=2.0, step=0.1, format='%.1f') \
+                    .bind_value(cfg.aligner, 'gamma') \
+                    .tooltip('Lower = Allow cutting sentences (0.5 recommended)')
+                
+                # 切り替えコスト (delta_switch)
+                ui.number('Switch Cost (Delta)', value=cfg.aligner.delta_switch, min=0.0, max=1.0, step=0.01, format='%.2f') \
+                    .bind_value(cfg.aligner, 'delta_switch') \
+                    .tooltip('0.0 = Switch immediately if voice changes')
 
 def get_persistent_secret() -> str:
     secret_dir = Path.home() / ".ahe_whisper"
