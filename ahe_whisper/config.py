@@ -36,6 +36,8 @@ class DiarizationConfig:
     vad_th_end: float = 0.3
     em_tau_schedule: List[float] = field(default_factory=lambda: [10.0, 5.0, 3.0])
     min_speaker_duration_sec: float = 1.5
+    # A-B-A 型の真ん中の「話者島」を吸収する最大長（秒）
+    max_island_sec: float = 2.0
     min_fallback_duration_sec: float = 1.0
     min_speech_sec: float = 0.3
     max_merge_gap_sec: float = 1.5

@@ -394,6 +394,64 @@ def run(
             
             return merged
         
+        # --- NEW: smooth speaker "islands" (A-B-A patterns) ---
+        def smooth_speaker_islands(segments, max_island_sec=None):
+            """
+            A-B-A 型の短い「話者島」を前後の話者に吸収して丸める。
+            その後、同一話者で隙間 < 0.5秒 のセグメントをマージする。
+            """
+            if not segments or len(segments) < 3 or not isinstance(segments[0], dict):
+                return segments
+
+            # しきい値のデフォルト：config.diarization.max_island_sec があれば使う
+            if max_island_sec is None:
+                max_island_sec = float(
+                    getattr(config.diarization, "max_island_sec", 2.0)
+                )
+
+            # dict をコピーして安全側に
+            segs = [dict(s) for s in segments]
+
+            # 1) A-B-A パターンの B を A で塗りつぶす
+            for i in range(1, len(segs) - 1):
+                prev_seg = segs[i - 1]
+                cur_seg = segs[i]
+                next_seg = segs[i + 1]
+
+                prev_spk = prev_seg.get("speaker")
+                cur_spk = cur_seg.get("speaker")
+                next_spk = next_seg.get("speaker")
+
+                if not prev_spk or not next_spk:
+                    continue
+                # A-B-A のときだけ対象
+                if prev_spk != next_spk or prev_spk == cur_spk:
+                    continue
+
+                dur = float(cur_seg["end"]) - float(cur_seg["start"])
+                if dur <= max_island_sec:
+                    # 真ん中の短い島を前後の話者で塗りつぶす
+                    cur_seg["speaker"] = prev_spk
+
+            # 2) 隣接する同一話者セグメントをマージ（隙間 < 0.5秒）
+            merged = []
+            for seg in segs:
+                if not merged:
+                    merged.append(seg)
+                    continue
+
+                last = merged[-1]
+                if (
+                    seg.get("speaker") == last.get("speaker")
+                    and float(seg["start"]) - float(last["end"]) < 0.5
+                ):
+                    # 同一話者で 0.5秒未満の隙間 → 1つにまとめる
+                    last["end"] = float(seg["end"])
+                else:
+                    merged.append(seg)
+
+            return merged
+
         # diarization.min_speaker_duration_sec をしきい値として利用
         min_len = float(
             getattr(config.diarization, "min_speaker_duration_sec", 1.5)
@@ -403,6 +461,20 @@ def run(
             "[POST-MERGE] segments after merge_short=%d (min_len=%.2fs)",
             len(speaker_segments),
             min_len,
+        )
+        
+        # --- NEW: smooth short speaker "islands" (A-B-A型の短い島を吸収) ---
+        max_island_sec = float(
+            getattr(config.diarization, "max_island_sec", 2.0)
+        )
+        speaker_segments = smooth_speaker_islands(
+            speaker_segments,
+            max_island_sec=max_island_sec,
+        )
+        LOGGER.info(
+            "[POST-ISLAND] segments after smoothing=%d (max_island_sec=%.2fs)",
+            len(speaker_segments),
+            max_island_sec,
         )
 
         # --- ALIGNMENT SANITY CHECK: ended too early? ---
