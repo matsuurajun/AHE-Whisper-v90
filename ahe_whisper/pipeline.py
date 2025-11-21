@@ -394,8 +394,16 @@ def run(
             
             return merged
         
-        speaker_segments = merge_short_segments(speaker_segments, min_len=0.0)
-        LOGGER.info(f"[POST-MERGE] segments after merge_short={len(speaker_segments)}")
+        # diarization.min_speaker_duration_sec をしきい値として利用
+        min_len = float(
+            getattr(config.diarization, "min_speaker_duration_sec", 1.5)
+        )
+        speaker_segments = merge_short_segments(speaker_segments, min_len=min_len)
+        LOGGER.info(
+            "[POST-MERGE] segments after merge_short=%d (min_len=%.2fs)",
+            len(speaker_segments),
+            min_len,
+        )
 
         # --- ALIGNMENT SANITY CHECK: ended too early? ---
         if speaker_segments and speaker_segments[-1]["end"] < duration_sec * 0.9:

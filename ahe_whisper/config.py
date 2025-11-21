@@ -35,7 +35,7 @@ class DiarizationConfig:
     vad_th_start: float = 0.5
     vad_th_end: float = 0.3
     em_tau_schedule: List[float] = field(default_factory=lambda: [10.0, 5.0, 3.0])
-    min_speaker_duration_sec: float = 1.2
+    min_speaker_duration_sec: float = 1.5
     min_fallback_duration_sec: float = 1.0
     min_speech_sec: float = 0.3
     max_merge_gap_sec: float = 1.5
@@ -70,7 +70,7 @@ class AlignerConfig:
     beta: float = 0.8    # 話者確率 spk_probs の重み
     gamma: float = 0.5    # word_cost の重み
 
-    delta_switch: float = 0.0
+    delta_switch: float = 0.2
     non_speech_th: float = 0.02
     grid_hz: int = 50
 
