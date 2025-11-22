@@ -328,9 +328,19 @@ class Exporter:
             
         try:
             if "json" in self.config.output_formats:
-                json_output = {"segments": final_segs, "words": tagged_words, "metrics": result.get("metrics", {})}
+                json_output = {
+                    "segments": final_segs,
+                    "words": words,
+                    "metrics": result.get("metrics", {}),
+                }
                 with open(run_dir / f"{safe_basename}.json", 'w', encoding='utf-8') as f:
-                    json.dump(json_output, f, indent=2, ensure_ascii=False, default=self._default_serializer)
+                    json.dump(
+                        json_output,
+                        f,
+                        indent=2,
+                        ensure_ascii=False,
+                        default=self._default_serializer,
+                    )
         except Exception as e:
             with open(error_log_path, "a", encoding="utf-8") as ef:
                 ef.write(f"Final JSON export failed: {e}\n{traceback.format_exc()}\n")
