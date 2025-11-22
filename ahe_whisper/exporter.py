@@ -72,6 +72,95 @@ def _tag_words_with_speaker(words: List[Dict[str, Any]], speaker_segs: List[Dict
             
     return words
 
+def _assign_words_to_segments(
+    words: List[Dict[str, Any]],
+    segments: List[Dict[str, Any]],
+) -> (List[Dict[str, Any]], List[Dict[str, Any]]):
+    """
+    各単語をちょうど 1 つのセグメントに割り当てる。
+      - 時間的に重なっているセグメントのみ候補
+      - 重なり時間が最大のセグメントに所属させる
+      - 割り当てたセグメントの speaker を word['speaker'] に付与
+      - セグメントの text は割り当てられた単語のみから再構成
+    """
+    if not segments or not words:
+        for w in words:
+            w["speaker"] = None
+        return words, []
+
+    # start 昇順に並べ替えて扱う
+    segs = sorted(segments, key=lambda s: float(s.get("start", 0.0)))
+    seg_word_buckets: List[List[Dict[str, Any]]] = [[] for _ in segs]
+
+    for w in words:
+        start_raw = w.get("start")
+        end_raw = w.get("end")
+        try:
+            w_start = float(start_raw)
+            w_end = float(end_raw)
+        except (TypeError, ValueError):
+            w["speaker"] = None
+            continue
+
+        if w_end <= w_start:
+            w["speaker"] = None
+            continue
+
+        best_idx = -1
+        best_overlap = 0.0
+
+        for idx, seg in enumerate(segs):
+            try:
+                s_start = float(seg.get("start", 0.0))
+                s_end = float(seg.get("end", s_start))
+            except (TypeError, ValueError):
+                continue
+
+            if s_end <= s_start:
+                continue
+
+            # 時間的重なり量
+            overlap = min(s_end, w_end) - max(s_start, w_start)
+            if overlap > best_overlap and overlap > 0.0:
+                best_overlap = overlap
+                best_idx = idx
+
+        if best_idx >= 0:
+            seg_word_buckets[best_idx].append(w)
+            w["speaker"] = segs[best_idx].get("speaker")
+        else:
+            w["speaker"] = None
+
+    def _wtext_local(w: Dict[str, Any]) -> str:
+        return (w.get("text") or w.get("word") or "").strip()
+
+    new_segments: List[Dict[str, Any]] = []
+    for seg, seg_words in zip(segs, seg_word_buckets):
+        if not seg_words:
+            continue
+
+        text = " ".join(_wtext_local(w) for w in seg_words).strip()
+        if not text:
+            continue
+
+        try:
+            s_start = float(seg.get("start", 0.0))
+            s_end = float(seg.get("end", s_start))
+        except (TypeError, ValueError):
+            continue
+
+        speaker_label = seg.get("speaker") or "SPEAKER_00"
+        new_segments.append(
+            {
+                "start": s_start,
+                "end": s_end,
+                "speaker": speaker_label,
+                "text": text,
+            }
+        )
+
+    return words, new_segments
+
 class Exporter:
     def __init__(self, output_dir: str, config: ExportConfig) -> None:
         self.output_dir = Path(output_dir)
@@ -200,9 +289,14 @@ class Exporter:
                         clamped_segs.append(seg)
                 final_segs = clamped_segs
 
-        tagged_words = _tag_words_with_speaker(words, final_segs)
-        result['words'] = tagged_words
-        result['speaker_segments'] = final_segs
+            # 単語→セグメントを一意に割り当てて text を再構成
+            words, final_segs = _assign_words_to_segments(words, final_segs)
+        else:
+            # セグメントが無い場合でも speaker フィールドだけは整理しておく
+            words, final_segs = _assign_words_to_segments(words, final_segs)
+
+        result["words"] = words
+        result["speaker_segments"] = final_segs
 
         try:
             raw_path = run_dir / f"{safe_basename}_raw_output.json"
